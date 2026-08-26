@@ -1,0 +1,14 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.inthesky.radar.glasses'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.inthesky.radar.glasses'
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+    }
+}

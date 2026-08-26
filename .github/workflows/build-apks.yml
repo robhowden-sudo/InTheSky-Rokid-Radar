@@ -1,0 +1,68 @@
+name: Build In The Sky Radar APKs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 34
+        run: yes | sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build phone and glasses debug APKs
+        run: gradle --no-daemon :phone:assembleDebug :glasses:assembleDebug
+
+      - name: Collect APKs
+        shell: bash
+        run: |
+          mkdir -p apk-output
+          cp phone/build/outputs/apk/debug/phone-debug.apk apk-output/InTheSkyRadarPhone-debug.apk
+          cp glasses/build/outputs/apk/debug/glasses-debug.apk apk-output/InTheSkyRadarGlasses-debug.apk
+          sha256sum apk-output/*.apk > apk-output/SHA256SUMS.txt
+          ls -lh apk-output
+
+      - name: Upload phone APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: InTheSkyRadarPhone-APK
+          path: apk-output/InTheSkyRadarPhone-debug.apk
+          if-no-files-found: error
+
+      - name: Upload Rokid glasses APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: InTheSkyRadarGlasses-APK
+          path: apk-output/InTheSkyRadarGlasses-debug.apk
+          if-no-files-found: error
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: APK-Checksums
+          path: apk-output/SHA256SUMS.txt
+          if-no-files-found: error

@@ -1,0 +1,14 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.inthesky.radar.phone'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.inthesky.radar.phone'
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+    }
+}
