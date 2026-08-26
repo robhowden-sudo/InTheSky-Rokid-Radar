@@ -29,6 +29,7 @@ import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.UnknownHostException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -52,10 +53,13 @@ public class MainActivity extends Activity implements LocationListener {
     private BufferedOutputStream out;
     private volatile boolean running = true;
     private int rangeMiles = 25;
+    private volatile long lastSuccessMs = 0L;
+    private volatile JSONObject lastGoodPacket = null;
 
     private TextView status;
     private TextView rangeLabel;
     private TextView aircraftLabel;
+    private TextView lastUpdateLabel;
     private Button connectButton;
 
     @Override public void onCreate(Bundle state) {
@@ -64,6 +68,7 @@ public class MainActivity extends Activity implements LocationListener {
         getWindow().setNavigationBarColor(Color.BLACK);
         bluetooth = BluetoothAdapter.getDefaultAdapter();
         locationManager = (LocationManager)getSystemService(LOCATION_SERVICE);
+        rangeMiles = Math.max(1, Math.min(200, getPreferences(MODE_PRIVATE).getInt("range_miles", 25)));
         setContentView(buildUi());
         requestPermissionsIfNeeded();
         worker.execute(this::updateLoop);
@@ -89,26 +94,28 @@ public class MainActivity extends Activity implements LocationListener {
         connectButton.setOnClickListener(v -> choosePairedDevice());
         root.addView(connectButton, new LinearLayout.LayoutParams(-1,-2));
 
-        rangeLabel = text("RADAR RANGE  25 MI", 18, green);
+        rangeLabel = text("RADAR RANGE  " + rangeMiles + " MI", 18, green);
         rangeLabel.setPadding(0,40,0,8);
         root.addView(rangeLabel);
 
         SeekBar range = new SeekBar(this);
         range.setMax(199);
-        range.setProgress(24);
+        range.setProgress(rangeMiles - 1);
         range.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
                 rangeMiles = p + 1;
                 rangeLabel.setText("RADAR RANGE  " + rangeMiles + " MI");
             }
             public void onStartTrackingTouch(SeekBar s) {}
-            public void onStopTrackingTouch(SeekBar s) { worker.execute(MainActivity.this::fetchAndSendOnce); }
+            public void onStopTrackingTouch(SeekBar s) { getPreferences(MODE_PRIVATE).edit().putInt("range_miles", rangeMiles).apply(); worker.execute(MainActivity.this::fetchAndSendOnce); }
         });
         root.addView(range, new LinearLayout.LayoutParams(-1,-2));
 
         aircraftLabel = text("0 CONTACTS", 20, green);
         aircraftLabel.setPadding(0,40,0,8);
         root.addView(aircraftLabel);
+        lastUpdateLabel = text("LAST LIVE UPDATE  --", 13, Color.rgb(174,244,202));
+        root.addView(lastUpdateLabel);
 
         TextView note = text("The phone handles GPS + OpenSky. The glasses only draw the HUD.\n\nPair the Rokid glasses in Android Bluetooth settings first, then connect here.", 15, Color.rgb(174,244,202));
         note.setPadding(0,24,0,24);
@@ -213,12 +220,40 @@ public class MainActivity extends Activity implements LocationListener {
     private void fetchAndSendOnce() {
         Location loc = lastLocation;
         if (loc == null) { setStatus(out == null ? "WAITING FOR GPS • GLASSES DISCONNECTED" : "WAITING FOR GPS • GLASSES CONNECTED"); return; }
-        try {
-            JSONObject packet = fetchOpenSky(loc.getLatitude(), loc.getLongitude(), rangeMiles);
-            int count = packet.getJSONArray("aircraft").length();
-            runOnUiThread(() -> aircraftLabel.setText(count + (count==1 ? " CONTACT" : " CONTACTS")));
-            sendPacket(packet);
-        } catch (Exception e) { setStatus("OPENSKY UPDATE FAILED • " + shortMsg(e)); }
+        Exception lastError = null;
+        for (int attempt=1; attempt<=3; attempt++) {
+            try {
+                if (attempt > 1) setStatus("RETRYING OPENSKY • " + attempt + "/3");
+                JSONObject packet = fetchOpenSky(loc.getLatitude(), loc.getLongitude(), rangeMiles);
+                lastGoodPacket = packet; lastSuccessMs = System.currentTimeMillis();
+                int count = packet.getJSONArray("aircraft").length();
+                runOnUiThread(() -> { aircraftLabel.setText(count + (count==1 ? " CONTACT" : " CONTACTS")); lastUpdateLabel.setText("LAST LIVE UPDATE  JUST NOW"); });
+                sendPacket(packet);
+                if (out == null) setStatus("LIVE • PHONE RADAR • " + rangeMiles + " MI");
+                return;
+            } catch (Exception e) {
+                lastError=e;
+                if (attempt<3) try { Thread.sleep(attempt*1500L); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+            }
+        }
+        updateLastSuccessAge();
+        setStatus((lastGoodPacket != null ? "OFFLINE • USING LAST CONTACTS • " : "OPENSKY OFFLINE • ") + friendlyNetworkError(lastError));
+        if (lastGoodPacket != null) sendPacket(lastGoodPacket);
+    }
+
+    private void updateLastSuccessAge() {
+        if (lastSuccessMs <= 0) return;
+        long sec=Math.max(0,(System.currentTimeMillis()-lastSuccessMs)/1000L);
+        String age=sec<60?sec+" SEC AGO":sec<3600?(sec/60)+" MIN AGO":(sec/3600)+" HR AGO";
+        runOnUiThread(() -> lastUpdateLabel.setText("LAST LIVE UPDATE  " + age));
+    }
+
+    private String friendlyNetworkError(Exception e) {
+        if (e == null) return "UNKNOWN ERROR";
+        if (e instanceof UnknownHostException) return "DNS TEMPORARILY UNAVAILABLE";
+        String m=shortMsg(e);
+        if (m.toLowerCase(Locale.ROOT).contains("timed out")) return "NETWORK TIMEOUT";
+        return m;
     }
 
     private JSONObject fetchOpenSky(double lat, double lon, int rangeMi) throws Exception {
@@ -229,7 +264,7 @@ public class MainActivity extends Activity implements LocationListener {
             "https://opensky-network.org/api/states/all?lamin=%.5f&lamax=%.5f&lomin=%.5f&lomax=%.5f",
             lat-latDelta, lat+latDelta, lon-lonDelta, lon+lonDelta);
         HttpURLConnection c = (HttpURLConnection)new URL(u).openConnection();
-        c.setConnectTimeout(15000); c.setReadTimeout(15000); c.setRequestProperty("User-Agent","InTheSky-Rokid-Radar/0.1");
+        c.setConnectTimeout(15000); c.setReadTimeout(15000); c.setUseCaches(false); c.setRequestProperty("Accept","application/json"); c.setRequestProperty("Connection","close"); c.setRequestProperty("User-Agent","InTheSky-Rokid-Radar/0.3");
         int code = c.getResponseCode();
         if (code < 200 || code >= 300) throw new Exception("HTTP " + code);
         StringBuilder sb = new StringBuilder();

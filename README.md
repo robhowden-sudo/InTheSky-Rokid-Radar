@@ -64,3 +64,7 @@ When the build succeeds, download these artifacts from the workflow run:
 - `InTheSkyRadarGlasses-APK` containing `InTheSkyRadarGlasses-debug.apk`
 
 The debug APKs are automatically signed with Android's debug signing key and are suitable for initial sideloading/testing. A release signing configuration can be added after the phone-to-glasses transport is verified on real Rokid hardware.
+
+
+## v0.3
+Phone networking retries, last-good contact preservation, last-live-update age, and persistent radar range.
