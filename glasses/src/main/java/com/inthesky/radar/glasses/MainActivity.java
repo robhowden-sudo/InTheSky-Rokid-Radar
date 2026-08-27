@@ -172,8 +172,8 @@ public class MainActivity extends Activity {
             if(alertsEnabled&&alertMi<rangeMi)c.drawCircle(cx,cy,radius*alertMi/(float)rangeMi,alert);
 
             bright.setTextSize(Math.max(16f,w*0.045f)); bright.setTextAlign(Paint.Align.CENTER);
-            c.drawText(autoCompass?headingName(headingDeg):"N",cx,cy-radius-10,bright); c.drawText("S",cx,cy+radius+24,bright);
-            c.drawText("W",cx-radius-18,cy+6,bright); c.drawText("E",cx+radius+18,cy+6,bright);
+            drawCardinal(c,"N",0f,cx,cy,radius);drawCardinal(c,"E",90f,cx,cy,radius);
+            drawCardinal(c,"S",180f,cx,cy,radius);drawCardinal(c,"W",270f,cx,cy,radius);
 
             float ang=(float)Math.toRadians(sweepDeg-90f);
             Path wedge=new Path(); wedge.moveTo(cx,cy);
@@ -209,7 +209,10 @@ public class MainActivity extends Activity {
             }
         }
 
-        private String headingName(float deg){int d=Math.round(deg)%360;if(d<0)d+=360;return d+"°";}
+        private void drawCardinal(Canvas c,String label,float worldBearing,float cx,float cy,float radius){
+            float display=worldBearing-(autoCompass?headingDeg:0f);double rad=Math.toRadians(display-90f);float rr=radius+18f;
+            c.drawText(label,cx+(float)Math.cos(rad)*rr,cy+(float)Math.sin(rad)*rr+6f,bright);
+        }
 
         private void drawAircraft(Canvas c,float x,float y,float track,int category) {
             if(category==8){c.save();c.rotate(track,x,y);c.drawCircle(x,y,3f,bright);c.drawLine(x-9,y,x+9,y,bright);c.drawLine(x,y-7,x,y+7,bright);c.restore();return;}
