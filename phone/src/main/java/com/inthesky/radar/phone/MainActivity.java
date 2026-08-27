@@ -93,6 +93,8 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
     private boolean autoCompass = true;
     private int compassOffsetDeg = -90;
     private volatile float headingDeg = 0f;
+    private volatile float lastHeadingSentDeg = -999f;
+    private volatile long lastHeadingSentMs = 0L;
     private boolean alertsEnabled = true;
     private int alertMiles = 5;
     private final Set<String> alertContacts = new HashSet<>();
@@ -261,6 +263,10 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
         SensorManager.getRotationMatrixFromVector(rotation,event.values); SensorManager.getOrientation(rotation,orientation);
         headingDeg=(float)normalizeBearing(Math.toDegrees(orientation[0])+compassOffsetDeg);
         if(headingLabel!=null)runOnUiThread(()->headingLabel.setText("COMPASS  "+Math.round(headingDeg)+"°   CALIBRATION  "+signed(compassOffsetDeg)+"°"));
+        long now=System.currentTimeMillis(); float change=Math.abs(headingDeg-lastHeadingSentDeg);change=Math.min(change,360f-change);
+        if(autoCompass&&sessionReady&&now-lastHeadingSentMs>=750L&&(lastHeadingSentDeg<-360f||change>=2f)){
+            lastHeadingSentMs=now;lastHeadingSentDeg=headingDeg;worker.execute(this::sendSettingsPacket);
+        }
     }
     @Override public void onAccuracyChanged(Sensor sensor,int accuracy) {}
 
@@ -593,7 +599,7 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
     private synchronized void updateEntryAlerts(JSONArray aircraft) {
         Set<String> now=new HashSet<>();
         if(aircraft!=null)for(int i=0;i<aircraft.length();i++){JSONObject a=aircraft.optJSONObject(i);if(a!=null&&a.optDouble("distanceMi",999)<=alertMiles)now.add(a.optString("id",""));}
-        if(alertsEnabled&&alertInitialized){for(String id:now)if(!id.isEmpty()&&!alertContacts.contains(id)){if(alertTone!=null)alertTone.startTone(ToneGenerator.TONE_PROP_BEEP,300);break;}}
+        if(alertsEnabled&&alertInitialized){for(String id:now)if(!id.isEmpty()&&!alertContacts.contains(id)){if(alertTone!=null)alertTone.startTone(ToneGenerator.TONE_PROP_BEEP2,450);break;}}
         alertContacts.clear();alertContacts.addAll(now);alertInitialized=true;
     }
 
