@@ -53,6 +53,9 @@ public class MainActivity extends Activity implements SensorEventListener {
         setContentView(radar);
         sensors = (SensorManager)getSystemService(SENSOR_SERVICE);
         rotationSensor = sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+        if(rotationSensor==null)rotationSensor=sensors.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
+        if(rotationSensor==null)rotationSensor=sensors.getDefaultSensor(Sensor.TYPE_ORIENTATION);
+        radar.setCompassAvailable(rotationSensor!=null);
         // Hi Rokid reports the session before its glasses endpoint is always
         // ready. Attaching a moment later avoids the first-launch race.
         radar.postDelayed(this::startCxrReceiver, 1500L);
@@ -69,6 +72,7 @@ public class MainActivity extends Activity implements SensorEventListener {
     }
 
     @Override public void onSensorChanged(SensorEvent event) {
+        if(event.sensor.getType()==Sensor.TYPE_ORIENTATION){radar.setHeading(event.values[0]);return;}
         float[] matrix=new float[9], orientation=new float[3];
         SensorManager.getRotationMatrixFromVector(matrix,event.values);
         SensorManager.getOrientation(matrix,orientation);
@@ -123,13 +127,14 @@ public class MainActivity extends Activity implements SensorEventListener {
     @Override protected void onDestroy(){running=false;if(tone!=null)tone.release();super.onDestroy();}
 
     private class RadarView extends View {
-        private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG),dim=new Paint(Paint.ANTI_ALIAS_FLAG),bright=new Paint(Paint.ANTI_ALIAS_FLAG),fill=new Paint(Paint.ANTI_ALIAS_FLAG),selected=new Paint(Paint.ANTI_ALIAS_FLAG),map=new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG),dim=new Paint(Paint.ANTI_ALIAS_FLAG),bright=new Paint(Paint.ANTI_ALIAS_FLAG),fill=new Paint(Paint.ANTI_ALIAS_FLAG),selected=new Paint(Paint.ANTI_ALIAS_FLAG),map=new Paint(Paint.ANTI_ALIAS_FLAG),mapLand=new Paint(Paint.ANTI_ALIAS_FLAG);
         private final List<Contact> contacts=new ArrayList<>();
         private final Set<String> knownIds=new HashSet<>();
         private float sweepDeg=0f,headingDeg=0f,touchX;
         private int rangeMi=25,selectedIndex=0;
         private String selectedId="",linkState="STARTING";
         private long lastPacket=0;
+        private boolean compassAvailable=false;
 
         RadarView(){
             super(MainActivity.this);setBackgroundColor(Color.BLACK);setFocusable(true);
@@ -138,11 +143,13 @@ public class MainActivity extends Activity implements SensorEventListener {
             bright.setColor(Color.rgb(150,255,190));bright.setStyle(Paint.Style.FILL);bright.setTextAlign(Paint.Align.CENTER);
             fill.setColor(Color.argb(45,79,255,159));fill.setStyle(Paint.Style.FILL);
             selected.setColor(Color.YELLOW);selected.setStyle(Paint.Style.STROKE);selected.setStrokeWidth(2.5f);
-            map.setColor(Color.argb(8,90,180,130));map.setStyle(Paint.Style.STROKE);map.setStrokeWidth(1f);
+            map.setColor(Color.argb(42,90,180,130));map.setStyle(Paint.Style.STROKE);map.setStrokeWidth(1.1f);
+            mapLand.setColor(Color.argb(18,70,145,105));mapLand.setStyle(Paint.Style.FILL);
             post(animator);
         }
         private final Runnable animator=new Runnable(){public void run(){sweepDeg=(sweepDeg+2.2f)%360f;invalidate();if(running)postDelayed(this,33);}};
         void setLinkState(String s){post(()->{linkState=s;invalidate();});}
+        void setCompassAvailable(boolean available){post(()->{compassAvailable=available;invalidate();});}
         void setHeading(float h){post(()->{float delta=((h-headingDeg+540f)%360f)-180f;headingDeg=(headingDeg+delta*.18f+360f)%360f;invalidate();});}
 
         void applyPacket(JSONObject o){
@@ -176,7 +183,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         @Override protected void onDraw(Canvas c){
             super.onDraw(c);float w=getWidth(),h=getHeight(),cx=w/2f;float radius=Math.min(w*.43f,h*.34f),cy=Math.min(h*.46f,radius+82f);
             bright.setTextSize(Math.max(15f,w*.038f));bright.setTextAlign(Paint.Align.LEFT);c.drawText("IN THE SKY",18,34,bright);
-            bright.setTextAlign(Paint.Align.RIGHT);c.drawText(linkState+"  "+Math.round(headingDeg)+"°",w-18,34,bright);
+            bright.setTextAlign(Paint.Align.RIGHT);c.drawText(linkState+"  "+(compassAvailable?Math.round(headingDeg)+"°":"NO COMPASS"),w-18,34,bright);
             if(lastPacket>0){long age=Math.max(0,(System.currentTimeMillis()-lastPacket)/1000L);String updated=age<3?"UPDATED JUST NOW":age<60?"UPDATED "+age+" SEC AGO":"UPDATED "+(age/60)+" MIN AGO";if(age>45)updated="STALE • "+updated;bright.setTextAlign(Paint.Align.CENTER);bright.setTextSize(Math.max(12f,w*.029f));c.drawText(updated,cx,57,bright);}
             drawMapLayer(c,cx,cy,radius);
             for(int i=1;i<=4;i++)c.drawCircle(cx,cy,radius*i/4f,dim);c.drawLine(cx-radius,cy,cx+radius,cy,dim);c.drawLine(cx,cy-radius,cx,cy+radius,dim);
@@ -190,9 +197,12 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
 
         private void drawMapLayer(Canvas c,float cx,float cy,float r){
-            c.save();c.clipPath(circlePath(cx,cy,r));
-            for(int i=-3;i<=3;i++){float y=cy+i*r/3f;c.drawLine(cx-r,y,cx+r,y+(i%2==0?12:-12),map);float x=cx+i*r/3f;c.drawLine(x,cy-r,x+(i%2==0?-10:10),cy+r,map);}
-            Path road=new Path();road.moveTo(cx-r,cy+r*.35f);road.cubicTo(cx-r*.35f,cy-r*.5f,cx+r*.15f,cy+r*.55f,cx+r,cy-r*.25f);c.drawPath(road,map);c.restore();
+            c.save();c.clipPath(circlePath(cx,cy,r-3));c.rotate(-headingDeg,cx,cy);
+            Path landA=new Path();landA.moveTo(cx-r,cy-r*.2f);landA.cubicTo(cx-r*.55f,cy-r*.7f,cx-r*.22f,cy-r*.28f,cx-r*.06f,cy+r*.05f);landA.cubicTo(cx-r*.28f,cy+r*.42f,cx-r*.62f,cy+r*.6f,cx-r,cy+r*.42f);landA.close();c.drawPath(landA,mapLand);
+            Path landB=new Path();landB.moveTo(cx+r*.18f,cy-r);landB.cubicTo(cx+r*.65f,cy-r*.7f,cx+r*.48f,cy-r*.18f,cx+r,cy+r*.02f);landB.lineTo(cx+r,cy+r*.62f);landB.cubicTo(cx+r*.62f,cy+r*.45f,cx+r*.4f,cy+r*.1f,cx+r*.12f,cy-r*.12f);landB.close();c.drawPath(landB,mapLand);
+            Path roadA=new Path();roadA.moveTo(cx-r,cy+r*.38f);roadA.cubicTo(cx-r*.35f,cy-r*.48f,cx+r*.15f,cy+r*.52f,cx+r,cy-r*.24f);c.drawPath(roadA,map);
+            Path roadB=new Path();roadB.moveTo(cx-r*.42f,cy-r);roadB.cubicTo(cx-r*.15f,cy-r*.2f,cx+r*.5f,cy-r*.18f,cx+r*.58f,cy+r);c.drawPath(roadB,map);
+            c.restore();
         }
         private Path circlePath(float x,float y,float r){Path q=new Path();q.addCircle(x,y,r,Path.Direction.CW);return q;}
         private void drawCardinals(Canvas c,float cx,float cy,float r){String[] names={"N","E","S","W"};float[] bearings={0,90,180,270};bright.setTextSize(Math.max(15f,getWidth()*.04f));bright.setTextAlign(Paint.Align.CENTER);for(int i=0;i<4;i++){double a=Math.toRadians(bearings[i]-headingDeg-90);c.drawText(names[i],cx+(float)Math.cos(a)*(r+18),cy+(float)Math.sin(a)*(r+18)+6,bright);}}
