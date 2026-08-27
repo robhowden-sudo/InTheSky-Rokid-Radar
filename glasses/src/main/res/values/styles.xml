@@ -2,11 +2,6 @@
     <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowFullscreen">true</item>
-        <item name="android:windowIsTranslucent">false</item>
-        <item name="android:windowBackground">#000000</item>
-        <item name="android:colorBackground">#000000</item>
-        <item name="android:windowDisablePreview">true</item>
-        <item name="android:backgroundDimEnabled">false</item>
         <item name="android:navigationBarColor">#000000</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>

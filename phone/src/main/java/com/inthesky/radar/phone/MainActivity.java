@@ -64,6 +64,7 @@ public class MainActivity extends Activity implements LocationListener {
     private volatile boolean restartInProgress = false;
     private volatile long lastGlassesAckMs = 0L;
     private volatile long sessionReadyMs = 0L;
+    private volatile boolean glassesUserClosed = false;
     private volatile String connectedDeviceName = "ROKID GLASSES";
     private volatile boolean running = true;
     private int rangeMiles = 25;
@@ -189,7 +190,16 @@ public class MainActivity extends Activity implements LocationListener {
     private void configureHiRokidLink() {
         cxrLink.setCXRCustomCmdCbk(new ICustomCmdCbk() {
             @Override public void onCustomCmdResult(String command, byte[] data) {
+                if ("inthesky_radar_closed".equals(command)) {
+                    if (!restartInProgress) {
+                        glassesUserClosed = true;
+                        sessionReady = false;
+                        setStatus("RADAR HUD CLOSED ON GLASSES");
+                    }
+                    return;
+                }
                 if (!"inthesky_radar_ack".equals(command)) return;
+                glassesUserClosed = false;
                 lastGlassesAckMs = System.currentTimeMillis();
                 setStatus("LIVE • HI ROKID → " + connectedDeviceName + " • " + rangeMiles + " MI");
             }
@@ -231,6 +241,7 @@ public class MainActivity extends Activity implements LocationListener {
             @Override public void onSessionStart(CxrDefs.CXRSessionReason reason) {
                 sessionReady = true;
                 glassesConnected = true;
+                glassesUserClosed = false;
                 sessionReadyMs = System.currentTimeMillis();
                 setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • RADAR SESSION READY");
                 runOnUiThread(() -> connectButton.setText("REAUTHORIZE HI ROKID"));
@@ -273,6 +284,7 @@ public class MainActivity extends Activity implements LocationListener {
     private void markRadarSessionReady() {
         sessionReady = true;
         glassesConnected = true;
+        glassesUserClosed = false;
         sessionReadyMs = System.currentTimeMillis();
         setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • RADAR SESSION READY");
         runOnUiThread(() -> connectButton.setText("REAUTHORIZE HI ROKID"));
@@ -338,8 +350,7 @@ public class MainActivity extends Activity implements LocationListener {
         while (running) {
             try { Thread.sleep(5000L); } catch (InterruptedException e) { return; }
             long baseline = Math.max(lastGlassesAckMs, sessionReadyMs);
-            long timeout = lastGlassesAckMs == 0L ? 35_000L : 45_000L;
-            if (sessionReady && baseline > 0 && System.currentTimeMillis()-baseline > timeout) restartGlassesHud();
+            if (!glassesUserClosed && lastGlassesAckMs > 0L && sessionReady && baseline > 0 && System.currentTimeMillis()-baseline > 45_000L) restartGlassesHud();
         }
     }
 

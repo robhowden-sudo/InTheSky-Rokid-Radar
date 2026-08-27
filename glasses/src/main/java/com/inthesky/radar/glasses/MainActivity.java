@@ -49,7 +49,6 @@ public class MainActivity extends Activity implements SensorEventListener {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().setStatusBarColor(Color.BLACK);
         getWindow().setNavigationBarColor(Color.BLACK);
-        getWindow().getDecorView().setBackgroundColor(Color.BLACK);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
         tone = new ToneGenerator(AudioManager.STREAM_NOTIFICATION, 65);
         radar = new RadarView();
@@ -126,7 +125,10 @@ public class MainActivity extends Activity implements SensorEventListener {
     }
 
     private void ping(){try{tone.startTone(ToneGenerator.TONE_PROP_BEEP,180);}catch(Exception ignored){}}
-    @Override protected void onDestroy(){running=false;if(tone!=null)tone.release();super.onDestroy();}
+    @Override protected void onDestroy(){
+        if(cxrConnected&&!activityRestarting){try{Caps closed=new Caps();closed.write("closed");cxrBridge.sendMessage("inthesky_radar_closed",closed,"closed".getBytes(StandardCharsets.UTF_8));}catch(Exception ignored){}}
+        running=false;if(tone!=null)tone.release();super.onDestroy();
+    }
 
     private class RadarView extends View {
         private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG),dim=new Paint(Paint.ANTI_ALIAS_FLAG),bright=new Paint(Paint.ANTI_ALIAS_FLAG),fill=new Paint(Paint.ANTI_ALIAS_FLAG),selected=new Paint(Paint.ANTI_ALIAS_FLAG);
