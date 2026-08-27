@@ -42,7 +42,12 @@ public class MainActivity extends Activity {
         try {
             cxrBridge = new CXRServiceBridge();
             cxrBridge.setStatusListener(new CXRServiceBridge.StatusListener() {
-                @Override public void onConnected(String deviceInfo, int deviceType) { radar.setLinkState("CXR • PHONE CONNECTED"); }
+                @Override public void onConnecting(String deviceInfo, String macAddress, int deviceType) {
+                    radar.setLinkState("CXR • CONNECTING");
+                }
+                @Override public void onConnected(String deviceInfo, String macAddress, int deviceType) {
+                    radar.setLinkState("CXR • PHONE CONNECTED");
+                }
                 @Override public void onDisconnected() { radar.setLinkState("CXR • WAITING FOR PHONE"); }
                 @Override public void onARTCStatus(float quality, boolean isHealthy) {}
                 @Override public void onRokidAccountChanged(String account) {}

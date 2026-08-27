@@ -78,3 +78,9 @@ Phone networking retries, last-good contact preservation, last-live-update age, 
 - OpenSky, GPS, 1-200 mile range and radar packet format are otherwise unchanged from v0.3.
 
 This is an integration/test build. CXR availability still depends on the Rokid firmware/SDK environment on the target glasses.
+
+
+## v0.4.1 CXR compile fix
+- Updated CXRServiceBridge.StatusListener for Rokid CXR 1.0.8.
+- Added required onConnecting(String, String, int).
+- Updated onConnected to the 1.0.8 three-argument signature.
