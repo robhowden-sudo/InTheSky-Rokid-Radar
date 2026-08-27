@@ -107,6 +107,8 @@ public class MainActivity extends Activity {
         private long lastPacket = 0;
         private boolean autoCompass = false;
         private float headingDeg = 0f;
+        private float displayHeadingDeg = 0f;
+        private boolean headingInitialized = false;
         private boolean alertsEnabled = false;
         private int alertMi = 5;
         private int selectedIndex = 0;
@@ -124,7 +126,7 @@ public class MainActivity extends Activity {
         }
 
         private final Runnable animator = new Runnable() {
-            public void run() { sweepDeg=(sweepDeg+2.2f)%360f; invalidate(); if(running) postDelayed(this,33); }
+            public void run() { sweepDeg=(sweepDeg+2.2f)%360f;float d=((headingDeg-displayHeadingDeg+540f)%360f)-180f;displayHeadingDeg=(displayHeadingDeg+d*0.38f+360f)%360f;invalidate();if(running)postDelayed(this,33); }
         };
 
         void setLinkState(String s) { post(() -> { linkState=s; invalidate(); }); }
@@ -132,6 +134,7 @@ public class MainActivity extends Activity {
         void selectContact(int delta) { post(()->{synchronized(contacts){if(!contacts.isEmpty())selectedIndex=(selectedIndex+delta+contacts.size())%contacts.size();}invalidate();}); }
 
         void applyPacket(JSONObject o) {
+            if("radar_orientation".equals(o.optString("type"))){final float heading=(float)o.optDouble("headingDeg",0);post(()->{headingDeg=heading;if(!headingInitialized){displayHeadingDeg=heading;headingInitialized=true;}invalidate();});return;}
             if (!"radar_state".equals(o.optString("type"))) return;
             final int r=Math.max(1,Math.min(200,o.optInt("rangeMi",25)));
             final List<Contact> next=new ArrayList<>();
@@ -147,7 +150,7 @@ public class MainActivity extends Activity {
             final boolean orient=o.optBoolean("autoCompass",false); final float heading=(float)o.optDouble("headingDeg",0);
             final boolean alerts=o.optBoolean("alertsEnabled",false); final int zone=Math.max(1,o.optInt("alertMi",5));
             final String selected=o.optString("selectedId","");final long closeAt=o.optLong("autoPopupCloseAt",0L);
-            post(() -> { synchronized(contacts){contacts.clear();contacts.addAll(next);if(!selected.isEmpty())for(int i=0;i<contacts.size();i++)if(selected.equals(contacts.get(i).id)){selectedIndex=i;break;}if(selectedIndex>=contacts.size())selectedIndex=0;} rangeMi=r;autoCompass=orient;headingDeg=heading;alertsEnabled=alerts;alertMi=zone;autoPopupCloseAt=closeAt;lastPacket=System.currentTimeMillis();linkState="LIVE";invalidate(); });
+            post(() -> { synchronized(contacts){contacts.clear();contacts.addAll(next);if(!selected.isEmpty())for(int i=0;i<contacts.size();i++)if(selected.equals(contacts.get(i).id)){selectedIndex=i;break;}if(selectedIndex>=contacts.size())selectedIndex=0;} rangeMi=r;autoCompass=orient;headingDeg=heading;if(!headingInitialized){displayHeadingDeg=heading;headingInitialized=true;}alertsEnabled=alerts;alertMi=zone;autoPopupCloseAt=closeAt;lastPacket=System.currentTimeMillis();linkState="LIVE";invalidate(); });
         }
 
         @Override protected void onDraw(Canvas c) {
@@ -187,10 +190,10 @@ public class MainActivity extends Activity {
             List<Contact> snapshot; synchronized(contacts){snapshot=new ArrayList<>(contacts);}
             for(int contactIndex=0;contactIndex<snapshot.size();contactIndex++) { Contact ac=snapshot.get(contactIndex);
                 if(ac.distance>rangeMi) continue;
-                double displayBearing=ac.bearing-(autoCompass?headingDeg:0f);
+                double displayBearing=ac.bearing-(autoCompass?displayHeadingDeg:0f);
                 double rr=radius*(ac.distance/rangeMi), rad=Math.toRadians(displayBearing-90.0);
                 float x=cx+(float)(Math.cos(rad)*rr), y=cy+(float)(Math.sin(rad)*rr);
-                drawAircraft(c,x,y,ac.track-(autoCompass?headingDeg:0f),ac.category);
+                drawAircraft(c,x,y,ac.track-(autoCompass?displayHeadingDeg:0f),ac.category);
                 if(contactIndex==selectedIndex)c.drawCircle(x,y,13f,alert);
             }
 
@@ -210,7 +213,7 @@ public class MainActivity extends Activity {
         }
 
         private void drawCardinal(Canvas c,String label,float worldBearing,float cx,float cy,float radius){
-            float display=worldBearing-(autoCompass?headingDeg:0f);double rad=Math.toRadians(display-90f);float rr=radius+18f;
+            float display=worldBearing-(autoCompass?displayHeadingDeg:0f);double rad=Math.toRadians(display-90f);float rr=radius+18f;
             c.drawText(label,cx+(float)Math.cos(rad)*rr,cy+(float)Math.sin(rad)*rr+6f,bright);
         }
 

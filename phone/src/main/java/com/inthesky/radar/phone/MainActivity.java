@@ -95,6 +95,7 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
     private volatile float headingDeg = 0f;
     private volatile float lastHeadingSentDeg = -999f;
     private volatile long lastHeadingSentMs = 0L;
+    private volatile boolean orientationSendQueued = false;
     private boolean alertsEnabled = true;
     private boolean autoPopupAlerts = false;
     private int alertMiles = 5;
@@ -272,8 +273,8 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
         headingDeg=(float)normalizeBearing(Math.toDegrees(orientation[0])+compassOffsetDeg);
         if(headingLabel!=null)runOnUiThread(()->headingLabel.setText("COMPASS  "+Math.round(headingDeg)+"°   CALIBRATION  "+signed(compassOffsetDeg)+"°"));
         long now=System.currentTimeMillis(); float change=Math.abs(headingDeg-lastHeadingSentDeg);change=Math.min(change,360f-change);
-        if(autoCompass&&sessionReady&&now-lastHeadingSentMs>=750L&&(lastHeadingSentDeg<-360f||change>=2f)){
-            lastHeadingSentMs=now;lastHeadingSentDeg=headingDeg;worker.execute(this::sendSettingsPacket);
+        if(autoCompass&&sessionReady&&now-lastHeadingSentMs>=150L&&(lastHeadingSentDeg<-360f||change>=1f)&&!orientationSendQueued){
+            lastHeadingSentMs=now;lastHeadingSentDeg=headingDeg;orientationSendQueued=true;worker.execute(()->{try{sendOrientationPacket();}finally{orientationSendQueued=false;}});
         }
     }
     @Override public void onAccuracyChanged(Sensor sensor,int accuracy) {}
@@ -663,6 +664,11 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
         } catch (Exception e) {
             setStatus("HI ROKID RADAR SEND FAILED • " + shortMsg(e));
         }
+    }
+
+    private synchronized void sendOrientationPacket(){
+        if(!glassesConnected||!sessionReady||!autoCompass)return;
+        try{JSONObject o=new JSONObject();o.put("type","radar_orientation");o.put("headingDeg",headingDeg);Caps args=new Caps();args.write(o.toString());cxrLink.sendCustomCmd(RADAR_CHANNEL,args);}catch(Exception ignored){}
     }
 
     private synchronized void closeSocket() {
