@@ -49,6 +49,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().setStatusBarColor(Color.BLACK);
         getWindow().setNavigationBarColor(Color.BLACK);
+        getWindow().getDecorView().setBackgroundColor(Color.BLACK);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
         tone = new ToneGenerator(AudioManager.STREAM_NOTIFICATION, 65);
         radar = new RadarView();
@@ -133,7 +134,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         private final Set<String> knownIds=new HashSet<>();
         private float sweepDeg=0f,headingDeg=0f,touchX;
         private int rangeMi=25,selectedIndex=0;
-        private String selectedId="",linkState="STARTING";
+        private String selectedId="",linkState="STARTING • CONNECT FROM PHONE";
         private long lastPacket=0;
         private boolean compassAvailable=false;
 
