@@ -5,6 +5,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.drawable.ColorDrawable;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -37,7 +38,8 @@ public class MainActivity extends Activity implements SensorEventListener {
     private volatile boolean running = true;
     private CXRServiceBridge cxrBridge;
     private volatile boolean cxrConnected = false;
-    private int cxrAttempt = 0;
+    private int restartCount = 0;
+    private boolean activityRestarting = false;
     private SensorManager sensors;
     private Sensor rotationSensor;
     private ToneGenerator tone;
@@ -47,10 +49,12 @@ public class MainActivity extends Activity implements SensorEventListener {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().setStatusBarColor(Color.BLACK);
         getWindow().setNavigationBarColor(Color.BLACK);
+        getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
         tone = new ToneGenerator(AudioManager.STREAM_NOTIFICATION, 65);
         radar = new RadarView();
         setContentView(radar);
+        restartCount=getIntent().getIntExtra("cxr_restart_count",0);
         sensors = (SensorManager)getSystemService(SENSOR_SERVICE);
         rotationSensor = sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
         if(rotationSensor==null)rotationSensor=sensors.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
@@ -58,7 +62,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         radar.setCompassAvailable(rotationSensor!=null);
         // Hi Rokid reports the session before its glasses endpoint is always
         // ready. Attaching a moment later avoids the first-launch race.
-        radar.postDelayed(this::startCxrReceiver, 1500L);
+        radar.postDelayed(this::startCxrReceiver, 2500L);
     }
 
     @Override protected void onResume() {
@@ -72,13 +76,13 @@ public class MainActivity extends Activity implements SensorEventListener {
     }
 
     @Override public void onSensorChanged(SensorEvent event) {
-        if(event.sensor.getType()==Sensor.TYPE_ORIENTATION){radar.setHeading(event.values[0]);return;}
+        if(event.sensor.getType()==Sensor.TYPE_ORIENTATION){radar.setHeading((event.values[0]+90f)%360f);return;}
         float[] matrix=new float[9], orientation=new float[3];
         SensorManager.getRotationMatrixFromVector(matrix,event.values);
         SensorManager.getOrientation(matrix,orientation);
         float heading=(float)Math.toDegrees(orientation[0]);
         if(heading<0) heading+=360f;
-        radar.setHeading(heading);
+        radar.setHeading((heading+90f)%360f);
     }
     @Override public void onAccuracyChanged(Sensor sensor,int accuracy) {}
 
@@ -89,13 +93,12 @@ public class MainActivity extends Activity implements SensorEventListener {
     }
 
     private void startCxrReceiver() {
-        final int attempt = ++cxrAttempt;
         try {
             cxrBridge = new CXRServiceBridge();
             cxrBridge.setStatusListener(new CXRServiceBridge.StatusListener() {
                 @Override public void onConnecting(String d,String m,int t){radar.setLinkState("CXR • CONNECTING");}
-                @Override public void onConnected(String d,String m,int t){cxrConnected=true;cxrAttempt=0;radar.setLinkState("CXR • PHONE CONNECTED");}
-                @Override public void onDisconnected(){cxrConnected=false;radar.setLinkState("CXR • WAITING FOR PHONE");scheduleCxrRetry();}
+                @Override public void onConnected(String d,String m,int t){cxrConnected=true;restartCount=0;radar.setLinkState("CXR • PHONE CONNECTED");}
+                @Override public void onDisconnected(){cxrConnected=false;radar.setLinkState("CXR • WAITING FOR PHONE");radar.postDelayed(MainActivity.this::restartActivityForCxr,1800L);}
                 @Override public void onARTCStatus(float q,boolean h){}
                 @Override public void onRokidAccountChanged(String a){}
                 @Override public void onAudioNoise(float n){}
@@ -110,17 +113,16 @@ public class MainActivity extends Activity implements SensorEventListener {
                 }
             });
             radar.setLinkState(result==0?"CXR • WAITING FOR PHONE":"CXR SUBSCRIBE • "+result);
-            radar.postDelayed(() -> {
-                if(running && !cxrConnected && cxrAttempt==attempt) scheduleCxrRetry();
-            }, 4000L);
+            radar.postDelayed(this::restartActivityForCxr,7000L);
         }catch(Throwable t){radar.setLinkState("CXR SERVICE UNAVAILABLE");}
     }
 
-    private void scheduleCxrRetry(){
-        if(!running || cxrConnected || cxrAttempt>=5)return;
-        final int expected=cxrAttempt;
-        radar.setLinkState("CXR • RETRYING PHONE  "+(expected+1)+"/5");
-        radar.postDelayed(()->{if(running&&!cxrConnected&&cxrAttempt==expected)startCxrReceiver();},1200L);
+    private void restartActivityForCxr(){
+        if(!running||cxrConnected||activityRestarting||restartCount>=3)return;
+        activityRestarting=true;
+        radar.setLinkState("CXR • RESTARTING HUD  "+(restartCount+1)+"/3");
+        Intent relaunch=new Intent(this,MainActivity.class).putExtra("cxr_restart_count",restartCount+1).addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        radar.postDelayed(()->{startActivity(relaunch);finish();overridePendingTransition(0,0);},700L);
     }
 
     private void ping(){try{tone.startTone(ToneGenerator.TONE_PROP_BEEP,180);}catch(Exception ignored){}}
@@ -137,7 +139,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         private boolean compassAvailable=false;
 
         RadarView(){
-            super(MainActivity.this);setBackgroundColor(Color.BLACK);setFocusable(true);
+            super(MainActivity.this);setBackgroundColor(Color.TRANSPARENT);setFocusable(true);
             p.setColor(Color.rgb(79,255,159));p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2f);
             dim.setColor(Color.argb(135,79,255,159));dim.setStyle(Paint.Style.STROKE);dim.setStrokeWidth(1.2f);
             bright.setColor(Color.rgb(150,255,190));bright.setStyle(Paint.Style.FILL);bright.setTextAlign(Paint.Align.CENTER);

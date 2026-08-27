@@ -338,7 +338,7 @@ public class MainActivity extends Activity implements LocationListener {
         while (running) {
             try { Thread.sleep(5000L); } catch (InterruptedException e) { return; }
             long baseline = Math.max(lastGlassesAckMs, sessionReadyMs);
-            long timeout = lastGlassesAckMs == 0L ? 12_000L : 45_000L;
+            long timeout = lastGlassesAckMs == 0L ? 35_000L : 45_000L;
             if (sessionReady && baseline > 0 && System.currentTimeMillis()-baseline > timeout) restartGlassesHud();
         }
     }
