@@ -136,7 +136,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             p.setColor(Color.rgb(79,255,159));p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2f);
             dim.setColor(Color.argb(135,79,255,159));dim.setStyle(Paint.Style.STROKE);dim.setStrokeWidth(1.2f);
             bright.setColor(Color.rgb(150,255,190));bright.setStyle(Paint.Style.FILL);bright.setTextAlign(Paint.Align.CENTER);
-            fill.setColor(Color.argb(16,79,255,159));fill.setStyle(Paint.Style.FILL);
+            fill.setColor(Color.argb(45,79,255,159));fill.setStyle(Paint.Style.FILL);
             selected.setColor(Color.YELLOW);selected.setStyle(Paint.Style.STROKE);selected.setStrokeWidth(2.5f);
             map.setColor(Color.argb(8,90,180,130));map.setStyle(Paint.Style.STROKE);map.setStrokeWidth(1f);
             post(animator);
