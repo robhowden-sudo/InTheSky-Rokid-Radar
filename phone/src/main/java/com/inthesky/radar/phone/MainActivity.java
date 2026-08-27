@@ -78,6 +78,8 @@ public class MainActivity extends Activity implements LocationListener {
         configureHiRokidLink();
         rangeMiles = Math.max(1, Math.min(200, getPreferences(MODE_PRIVATE).getInt("range_miles", 25)));
         setContentView(buildUi());
+        Intent keepAlive = new Intent(this, RadarKeepAliveService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(keepAlive); else startService(keepAlive);
         requestPermissionsIfNeeded();
         worker.execute(this::updateLoop);
     }
@@ -149,6 +151,8 @@ public class MainActivity extends Activity implements LocationListener {
         ArrayList<String> needed = new ArrayList<>();
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
             needed.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            needed.add(Manifest.permission.POST_NOTIFICATIONS);
         if (!needed.isEmpty()) requestPermissions(needed.toArray(new String[0]), REQ_PERMS);
         else startLocation();
     }
@@ -363,11 +367,14 @@ public class MainActivity extends Activity implements LocationListener {
                 a.put("country", s.optString(2,""));
                 a.put("bearing", normalizeBearing(dr[1]));
                 a.put("distanceMi", round1(miles));
-                double altM = s.isNull(7) ? (s.isNull(13)?0:s.optDouble(13,0)) : s.optDouble(7,0);
-                a.put("altitudeFt", Math.round(altM * 3.28084));
+                boolean altitudeKnown = !s.isNull(7) || !s.isNull(13);
+                double altM = !s.isNull(7) ? s.optDouble(7,0) : (!s.isNull(13) ? s.optDouble(13,0) : 0);
+                a.put("altitudeKnown", altitudeKnown);
+                if (altitudeKnown) a.put("altitudeFt", Math.round(altM * 3.28084));
                 a.put("onGround", s.optBoolean(8,false));
                 a.put("speedKt", s.isNull(9)?0:Math.round(s.optDouble(9,0)*1.94384));
                 a.put("track", s.isNull(10)?0:Math.round(s.optDouble(10,0)));
+                a.put("category", s.length()>17 && !s.isNull(17) ? s.optInt(17,0) : 0);
                 aircraft.put(a);
             }
         }

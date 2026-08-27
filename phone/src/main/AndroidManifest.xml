@@ -2,10 +2,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <queries>
         <package android:name="com.rokid.sprite.global.aiapp" />
     </queries>
     <application android:allowBackup="true" android:label="In The Sky Radar Phone" android:theme="@style/AppTheme" android:usesCleartextTraffic="false">
+        <service android:name=".RadarKeepAliveService" android:exported="false" android:foregroundServiceType="dataSync" />
         <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
