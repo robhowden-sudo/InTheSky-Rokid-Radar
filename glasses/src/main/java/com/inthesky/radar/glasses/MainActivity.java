@@ -110,6 +110,7 @@ public class MainActivity extends Activity {
         private boolean alertsEnabled = false;
         private int alertMi = 5;
         private int selectedIndex = 0;
+        private long autoPopupCloseAt = 0L;
 
         RadarView() {
             super(MainActivity.this);
@@ -145,7 +146,8 @@ public class MainActivity extends Activity {
             next.sort(Comparator.comparingDouble(c -> c.distance));
             final boolean orient=o.optBoolean("autoCompass",false); final float heading=(float)o.optDouble("headingDeg",0);
             final boolean alerts=o.optBoolean("alertsEnabled",false); final int zone=Math.max(1,o.optInt("alertMi",5));
-            post(() -> { synchronized(contacts){contacts.clear();contacts.addAll(next);if(selectedIndex>=contacts.size())selectedIndex=0;} rangeMi=r;autoCompass=orient;headingDeg=heading;alertsEnabled=alerts;alertMi=zone;lastPacket=System.currentTimeMillis();linkState="LIVE";invalidate(); });
+            final String selected=o.optString("selectedId","");final long closeAt=o.optLong("autoPopupCloseAt",0L);
+            post(() -> { synchronized(contacts){contacts.clear();contacts.addAll(next);if(!selected.isEmpty())for(int i=0;i<contacts.size();i++)if(selected.equals(contacts.get(i).id)){selectedIndex=i;break;}if(selectedIndex>=contacts.size())selectedIndex=0;} rangeMi=r;autoCompass=orient;headingDeg=heading;alertsEnabled=alerts;alertMi=zone;autoPopupCloseAt=closeAt;lastPacket=System.currentTimeMillis();linkState="LIVE";invalidate(); });
         }
 
         @Override protected void onDraw(Canvas c) {
@@ -160,6 +162,7 @@ public class MainActivity extends Activity {
             String status=linkState;
             if(lastPacket>0){long age=(System.currentTimeMillis()-lastPacket)/1000L;status=(age>75?"STALE":"LIVE")+" • "+age+"S";}
             bright.setTextAlign(Paint.Align.RIGHT); c.drawText(status,w-18,34,bright);
+            if(autoPopupCloseAt>System.currentTimeMillis()){long remain=Math.max(1,(autoPopupCloseAt-System.currentTimeMillis()+999)/1000);bright.setTextAlign(Paint.Align.CENTER);c.drawText("ALERT HUD • "+remain+"S",cx,58,alert);}
 
             for(int i=1;i<=4;i++) c.drawCircle(cx,cy,radius*i/4f,dim);
             c.drawLine(cx-radius,cy,cx+radius,cy,dim); c.drawLine(cx,cy-radius,cx,cy+radius,dim);

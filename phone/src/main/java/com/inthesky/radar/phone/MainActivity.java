@@ -96,9 +96,14 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
     private volatile float lastHeadingSentDeg = -999f;
     private volatile long lastHeadingSentMs = 0L;
     private boolean alertsEnabled = true;
+    private boolean autoPopupAlerts = false;
     private int alertMiles = 5;
     private final Set<String> alertContacts = new HashSet<>();
     private boolean alertInitialized = false;
+    private volatile boolean autoPopupPending = false;
+    private volatile boolean autoPopupActive = false;
+    private volatile long autoPopupCloseAtMs = 0L;
+    private volatile String alertSelectedId = "";
     private ToneGenerator alertTone;
 
     private TextView status;
@@ -123,6 +128,7 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
         autoCompass = getPreferences(MODE_PRIVATE).getBoolean("auto_compass", true);
         compassOffsetDeg = getPreferences(MODE_PRIVATE).getInt("compass_offset", -90);
         alertsEnabled = getPreferences(MODE_PRIVATE).getBoolean("alerts_enabled", true);
+        autoPopupAlerts = getPreferences(MODE_PRIVATE).getBoolean("auto_popup_alerts", false);
         alertMiles = Math.max(1, Math.min(200, getPreferences(MODE_PRIVATE).getInt("alert_miles", 5)));
         alertTone = new ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80);
         setContentView(buildUi());
@@ -190,6 +196,8 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
             public void onProgressChanged(SeekBar s,int p,boolean user){alertMiles=p+1;alertLabel.setText("ALERT ZONE  "+alertMiles+" MI");}
             public void onStartTrackingTouch(SeekBar s){} public void onStopTrackingTouch(SeekBar s){alertInitialized=false;getPreferences(MODE_PRIVATE).edit().putInt("alert_miles",alertMiles).apply();sendSettingsPacket();}
         }); root.addView(alertRange,new LinearLayout.LayoutParams(-1,-2));
+        CheckBox popup=new CheckBox(this);popup.setText("AUTO-POPUP HUD FOR 10 SECONDS");popup.setTextColor(green);popup.setChecked(autoPopupAlerts);
+        popup.setOnCheckedChangeListener((b,checked)->{autoPopupAlerts=checked;getPreferences(MODE_PRIVATE).edit().putBoolean("auto_popup_alerts",checked).apply();});root.addView(popup);
 
         aircraftLabel = text("0 CONTACTS", 20, green);
         aircraftLabel.setPadding(0,40,0,8);
@@ -276,6 +284,8 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
                 if ("inthesky_radar_closed".equals(command)) {
                     if (!restartInProgress) {
                         glassesUserClosed = true;
+                        autoPopupPending = false;
+                        autoPopupActive = false;
                         sessionReady = false;
                         appStartRequested = false;
                         setStatus("RADAR HUD CLOSED ON GLASSES");
@@ -286,6 +296,7 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
                 if (!"inthesky_radar_ack".equals(command)) return;
                 glassesUserClosed = false;
                 lastGlassesAckMs = System.currentTimeMillis();
+                if(autoPopupPending){autoPopupPending=false;autoPopupActive=true;autoPopupCloseAtMs=System.currentTimeMillis()+10_000L;sendSettingsPacket();scheduleAutoPopupClose();}
                 setStatus("LIVE • HI ROKID → " + connectedDeviceName + " • " + rangeMiles + " MI");
             }
         });
@@ -594,13 +605,29 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
     private void addDisplaySettings(JSONObject packet) throws Exception {
         packet.put("autoCompass",autoCompass); packet.put("headingDeg",headingDeg);
         packet.put("alertsEnabled",alertsEnabled); packet.put("alertMi",Math.min(alertMiles,rangeMiles));
+        packet.put("selectedId",alertSelectedId);packet.put("autoPopupCloseAt",autoPopupActive?autoPopupCloseAtMs:0L);
     }
 
     private synchronized void updateEntryAlerts(JSONArray aircraft) {
         Set<String> now=new HashSet<>();
         if(aircraft!=null)for(int i=0;i<aircraft.length();i++){JSONObject a=aircraft.optJSONObject(i);if(a!=null&&a.optDouble("distanceMi",999)<=alertMiles)now.add(a.optString("id",""));}
-        if(alertsEnabled&&alertInitialized){for(String id:now)if(!id.isEmpty()&&!alertContacts.contains(id)){if(alertTone!=null)alertTone.startTone(ToneGenerator.TONE_PROP_BEEP2,450);break;}}
+        if(alertsEnabled&&alertInitialized){for(String id:now)if(!id.isEmpty()&&!alertContacts.contains(id)){alertSelectedId=id;if(alertTone!=null)alertTone.startTone(ToneGenerator.TONE_PROP_BEEP2,450);triggerAutoPopup();break;}}
         alertContacts.clear();alertContacts.addAll(now);alertInitialized=true;
+    }
+
+    private void triggerAutoPopup() {
+        if(!autoPopupAlerts||!glassesConnected)return;
+        if(autoPopupActive){autoPopupCloseAtMs=System.currentTimeMillis()+10_000L;sendSettingsPacket();scheduleAutoPopupClose();return;}
+        if(sessionReady){sendSettingsPacket();return;}
+        autoPopupPending=true;reopenGlassesRadarApp();
+    }
+
+    private void scheduleAutoPopupClose(){long expected=autoPopupCloseAtMs;runOnUiThread(()->connectButton.postDelayed(()->{if(autoPopupActive&&autoPopupCloseAtMs==expected&&System.currentTimeMillis()>=expected)closeAutoPopupHud();},10_100L));}
+
+    private synchronized void closeAutoPopupHud(){
+        if(!autoPopupActive)return;autoPopupActive=false;autoPopupPending=false;glassesUserClosed=true;sessionReady=false;appStartRequested=false;
+        setStatus("ALERT HUD COMPLETE • CLOSED AFTER 10 SECONDS");
+        cxrLink.appStop(new IGlassAppCbk(){public void onInstallAppResult(boolean success){}public void onUnInstallAppResult(boolean success){}public void onStopAppResult(boolean success){}public void onQueryAppResult(boolean installed){}public void onOpenAppResult(boolean success){}public void onGlassAppResume(boolean resumed){}});
     }
 
     private synchronized String getOpenSkyToken() throws Exception {
@@ -645,6 +672,7 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
         deliveryBurstRunning = false;
         restartInProgress = false;
         lastGlassesAckMs = 0L;
+        autoPopupPending=false;autoPopupActive=false;
         try { cxrLink.disconnect(); } catch (Exception ignored) {}
     }
 
