@@ -5,6 +5,10 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
@@ -15,7 +19,10 @@ import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.text.InputType;
+import android.media.AudioManager;
+import android.media.ToneGenerator;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -34,8 +41,10 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -50,7 +59,7 @@ import com.rokid.cxr.link.utils.GlassInfo;
 import com.rokid.sprite.aiapp.externalapp.auth.AuthResult;
 import com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper;
 
-public class MainActivity extends Activity implements LocationListener {
+public class MainActivity extends Activity implements LocationListener, SensorEventListener {
     private static final String RADAR_CHANNEL = "inthesky_radar_state";
     private static final int REQ_PERMS = 501;
     private static final int REQ_HI_ROKID_AUTH = 502;
@@ -60,6 +69,7 @@ public class MainActivity extends Activity implements LocationListener {
     // connect/range-change refreshes instead of leaving them behind its sleep.
     private final ExecutorService worker = Executors.newFixedThreadPool(5);
     private LocationManager locationManager;
+    private SensorManager sensorManager;
     private Location lastLocation;
     private CXRLink cxrLink;
     private volatile boolean glassesConnected = false;
@@ -80,11 +90,21 @@ public class MainActivity extends Activity implements LocationListener {
     private volatile long openskyRetryAfterMs = 0L;
     private String openskyClientId = "";
     private String openskyClientSecret = "";
+    private boolean autoCompass = true;
+    private int compassOffsetDeg = -90;
+    private volatile float headingDeg = 0f;
+    private boolean alertsEnabled = true;
+    private int alertMiles = 5;
+    private final Set<String> alertContacts = new HashSet<>();
+    private boolean alertInitialized = false;
+    private ToneGenerator alertTone;
 
     private TextView status;
     private TextView rangeLabel;
     private TextView aircraftLabel;
     private TextView lastUpdateLabel;
+    private TextView headingLabel;
+    private TextView alertLabel;
     private Button connectButton;
 
     @Override public void onCreate(Bundle state) {
@@ -92,12 +112,20 @@ public class MainActivity extends Activity implements LocationListener {
         getWindow().setStatusBarColor(Color.BLACK);
         getWindow().setNavigationBarColor(Color.BLACK);
         locationManager = (LocationManager)getSystemService(LOCATION_SERVICE);
+        sensorManager = (SensorManager)getSystemService(SENSOR_SERVICE);
         cxrLink = new CXRLink(this);
         configureHiRokidLink();
         rangeMiles = Math.max(1, Math.min(200, getPreferences(MODE_PRIVATE).getInt("range_miles", 25)));
         openskyClientId = getPreferences(MODE_PRIVATE).getString("opensky_client_id", "");
         openskyClientSecret = getPreferences(MODE_PRIVATE).getString("opensky_client_secret", "");
+        autoCompass = getPreferences(MODE_PRIVATE).getBoolean("auto_compass", true);
+        compassOffsetDeg = getPreferences(MODE_PRIVATE).getInt("compass_offset", -90);
+        alertsEnabled = getPreferences(MODE_PRIVATE).getBoolean("alerts_enabled", true);
+        alertMiles = Math.max(1, Math.min(200, getPreferences(MODE_PRIVATE).getInt("alert_miles", 5)));
+        alertTone = new ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80);
         setContentView(buildUi());
+        Sensor rotation=sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+        if(rotation!=null)sensorManager.registerListener(this,rotation,SensorManager.SENSOR_DELAY_UI);
         Intent keepAlive = new Intent(this, RadarKeepAliveService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(keepAlive); else startService(keepAlive);
         requestPermissionsIfNeeded();
@@ -144,6 +172,22 @@ public class MainActivity extends Activity implements LocationListener {
             public void onStopTrackingTouch(SeekBar s) { getPreferences(MODE_PRIVATE).edit().putInt("range_miles", rangeMiles).apply(); sendSettingsPacket(); worker.execute(MainActivity.this::fetchAndSendOnce); }
         });
         root.addView(range, new LinearLayout.LayoutParams(-1,-2));
+
+        CheckBox compass = new CheckBox(this); compass.setText("AUTO COMPASS ORIENTATION"); compass.setTextColor(green); compass.setChecked(autoCompass);
+        compass.setOnCheckedChangeListener((b,checked)->{autoCompass=checked;getPreferences(MODE_PRIVATE).edit().putBoolean("auto_compass",checked).apply();sendSettingsPacket();}); root.addView(compass);
+        headingLabel=text("COMPASS  0°   CALIBRATION  "+signed(compassOffsetDeg)+"°",14,green); headingLabel.setPadding(0,10,0,4); root.addView(headingLabel);
+        SeekBar calibration=new SeekBar(this); calibration.setMax(360); calibration.setProgress(compassOffsetDeg+180); calibration.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            public void onProgressChanged(SeekBar s,int p,boolean user){compassOffsetDeg=p-180;headingLabel.setText("COMPASS  "+Math.round(headingDeg)+"°   CALIBRATION  "+signed(compassOffsetDeg)+"°");}
+            public void onStartTrackingTouch(SeekBar s){} public void onStopTrackingTouch(SeekBar s){getPreferences(MODE_PRIVATE).edit().putInt("compass_offset",compassOffsetDeg).apply();sendSettingsPacket();}
+        }); root.addView(calibration,new LinearLayout.LayoutParams(-1,-2));
+
+        CheckBox alerts=new CheckBox(this); alerts.setText("AIRCRAFT ENTRY ALERT"); alerts.setTextColor(green); alerts.setChecked(alertsEnabled);
+        alerts.setOnCheckedChangeListener((b,checked)->{alertsEnabled=checked;alertInitialized=false;getPreferences(MODE_PRIVATE).edit().putBoolean("alerts_enabled",checked).apply();sendSettingsPacket();}); root.addView(alerts);
+        alertLabel=text("ALERT ZONE  "+alertMiles+" MI",16,green); alertLabel.setPadding(0,10,0,4); root.addView(alertLabel);
+        SeekBar alertRange=new SeekBar(this); alertRange.setMax(199); alertRange.setProgress(alertMiles-1); alertRange.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            public void onProgressChanged(SeekBar s,int p,boolean user){alertMiles=p+1;alertLabel.setText("ALERT ZONE  "+alertMiles+" MI");}
+            public void onStartTrackingTouch(SeekBar s){} public void onStopTrackingTouch(SeekBar s){alertInitialized=false;getPreferences(MODE_PRIVATE).edit().putInt("alert_miles",alertMiles).apply();sendSettingsPacket();}
+        }); root.addView(alertRange,new LinearLayout.LayoutParams(-1,-2));
 
         aircraftLabel = text("0 CONTACTS", 20, green);
         aircraftLabel.setPadding(0,40,0,8);
@@ -211,6 +255,14 @@ public class MainActivity extends Activity implements LocationListener {
     }
 
     @Override public void onLocationChanged(Location l) { lastLocation = l; }
+
+    @Override public void onSensorChanged(SensorEvent event) {
+        float[] rotation=new float[9], orientation=new float[3];
+        SensorManager.getRotationMatrixFromVector(rotation,event.values); SensorManager.getOrientation(rotation,orientation);
+        headingDeg=(float)normalizeBearing(Math.toDegrees(orientation[0])+compassOffsetDeg);
+        if(headingLabel!=null)runOnUiThread(()->headingLabel.setText("COMPASS  "+Math.round(headingDeg)+"°   CALIBRATION  "+signed(compassOffsetDeg)+"°"));
+    }
+    @Override public void onAccuracyChanged(Sensor sensor,int accuracy) {}
 
     private void configureHiRokidLink() {
         cxrLink.setCXRCustomCmdCbk(new ICustomCmdCbk() {
@@ -318,8 +370,14 @@ public class MainActivity extends Activity implements LocationListener {
         sessionReady = false;
         appStartRequested = false;
         lastGlassesAckMs = 0L;
-        setStatus("HI ROKID • REOPENING RADAR HUD");
-        startGlassesRadarApp();
+        restartInProgress = true;
+        setStatus("HI ROKID • CREATING FRESH RADAR SESSION");
+        cxrLink.appStop(new IGlassAppCbk() {
+            public void onInstallAppResult(boolean success){} public void onUnInstallAppResult(boolean success){}
+            public void onStopAppResult(boolean success){finishHudRestart();} public void onQueryAppResult(boolean installed){}
+            public void onOpenAppResult(boolean success){} public void onGlassAppResume(boolean resumed){}
+        });
+        runOnUiThread(()->connectButton.postDelayed(this::finishHudRestart,2500L));
     }
 
     private void markRadarSessionReady() {
@@ -432,6 +490,7 @@ public class MainActivity extends Activity implements LocationListener {
                 if (attempt > 1) setStatus("RETRYING OPENSKY • " + attempt + "/3");
                 JSONObject packet = fetchOpenSky(loc.getLatitude(), loc.getLongitude(), rangeMiles);
                 lastGoodPacket = packet; lastSuccessMs = System.currentTimeMillis();
+                updateEntryAlerts(packet.optJSONArray("aircraft"));
                 int count = packet.getJSONArray("aircraft").length();
                 runOnUiThread(() -> { aircraftLabel.setText(count + (count==1 ? " CONTACT" : " CONTACTS")); lastUpdateLabel.setText("LAST LIVE UPDATE  JUST NOW"); });
                 sendPacket(packet);
@@ -453,7 +512,8 @@ public class MainActivity extends Activity implements LocationListener {
         if (!glassesConnected || !sessionReady) return;
         try {
             JSONObject packet=lastGoodPacket==null?new JSONObject():new JSONObject(lastGoodPacket.toString());
-            packet.put("type","radar_state"); packet.put("v",1); packet.put("time",System.currentTimeMillis()); packet.put("rangeMi",rangeMiles);
+            packet.put("type","radar_state"); packet.put("v",2); packet.put("time",System.currentTimeMillis()); packet.put("rangeMi",rangeMiles);
+            addDisplaySettings(packet);
             if(!packet.has("aircraft"))packet.put("aircraft",new JSONArray());
             sendPacket(packet);
         } catch(Exception ignored) {}
@@ -521,8 +581,20 @@ public class MainActivity extends Activity implements LocationListener {
         }
         JSONObject packet = new JSONObject();
         packet.put("type","radar_state"); packet.put("v",1); packet.put("time",System.currentTimeMillis());
-        packet.put("rangeMi",rangeMi); packet.put("homeLat",lat); packet.put("homeLon",lon); packet.put("northUp",true); packet.put("aircraft",aircraft);
+        packet.put("rangeMi",rangeMi); packet.put("homeLat",lat); packet.put("homeLon",lon); packet.put("northUp",!autoCompass); packet.put("aircraft",aircraft); addDisplaySettings(packet);
         return packet;
+    }
+
+    private void addDisplaySettings(JSONObject packet) throws Exception {
+        packet.put("autoCompass",autoCompass); packet.put("headingDeg",headingDeg);
+        packet.put("alertsEnabled",alertsEnabled); packet.put("alertMi",Math.min(alertMiles,rangeMiles));
+    }
+
+    private synchronized void updateEntryAlerts(JSONArray aircraft) {
+        Set<String> now=new HashSet<>();
+        if(aircraft!=null)for(int i=0;i<aircraft.length();i++){JSONObject a=aircraft.optJSONObject(i);if(a!=null&&a.optDouble("distanceMi",999)<=alertMiles)now.add(a.optString("id",""));}
+        if(alertsEnabled&&alertInitialized){for(String id:now)if(!id.isEmpty()&&!alertContacts.contains(id)){if(alertTone!=null)alertTone.startTone(ToneGenerator.TONE_PROP_BEEP,300);break;}}
+        alertContacts.clear();alertContacts.addAll(now);alertInitialized=true;
     }
 
     private synchronized String getOpenSkyToken() throws Exception {
@@ -540,10 +612,12 @@ public class MainActivity extends Activity implements LocationListener {
 
     private static double normalizeBearing(double b) { b %= 360.0; return b < 0 ? b + 360.0 : b; }
     private static double round1(double v) { return Math.round(v*10.0)/10.0; }
+    private static String signed(int v){return v>0?"+"+v:String.valueOf(v);}
 
     private synchronized void sendPacket(JSONObject packet) {
         if (!glassesConnected || !sessionReady) return;
         try {
+            addDisplaySettings(packet); packet.put("rangeMi",rangeMiles);
             Caps args = new Caps();
             args.write(packet.toString());
             Integer result = cxrLink.sendCustomCmd(RADAR_CHANNEL, args);
@@ -573,6 +647,8 @@ public class MainActivity extends Activity implements LocationListener {
 
     @Override protected void onDestroy() {
         running=false; worker.shutdownNow(); closeSocket();
+        if(sensorManager!=null)sensorManager.unregisterListener(this);
+        if(alertTone!=null)alertTone.release();
         try { if(locationManager!=null) locationManager.removeUpdates(this); } catch(Exception ignored){}
         super.onDestroy();
     }
