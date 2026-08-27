@@ -37,6 +37,7 @@ import com.rokid.cxr.Caps;
 import com.rokid.cxr.link.CXRLink;
 import com.rokid.cxr.link.callbacks.ICXRLinkCbk;
 import com.rokid.cxr.link.callbacks.ICXRSessionCbk;
+import com.rokid.cxr.link.callbacks.IGlassAppCbk;
 import com.rokid.cxr.link.utils.CxrDefs;
 import com.rokid.cxr.link.utils.GlassInfo;
 import com.rokid.sprite.aiapp.externalapp.auth.AuthResult;
@@ -54,6 +55,7 @@ public class MainActivity extends Activity implements LocationListener {
     private CXRLink cxrLink;
     private volatile boolean glassesConnected = false;
     private volatile boolean sessionReady = false;
+    private volatile boolean appStartRequested = false;
     private volatile String connectedDeviceName = "ROKID GLASSES";
     private volatile boolean running = true;
     private int rangeMiles = 25;
@@ -183,6 +185,7 @@ public class MainActivity extends Activity implements LocationListener {
                     cxrLink.getGlassDeviceInfo();
                 } else {
                     sessionReady = false;
+                    appStartRequested = false;
                     setStatus("HI ROKID • GLASSES DISCONNECTED");
                 }
             }
@@ -202,7 +205,8 @@ public class MainActivity extends Activity implements LocationListener {
             CxrDefs.CXRSessionType.CUSTOMAPP, "com.inthesky.radar.glasses");
         cxrLink.configCXRSession(session, new ICXRSessionCbk() {
             @Override public void onSessionAvailable(CxrDefs.CXRSessionReason reason) {
-                setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • RADAR SESSION AVAILABLE");
+                setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • LAUNCHING RADAR HUD");
+                startGlassesRadarApp();
             }
             @Override public void onSessionStart(CxrDefs.CXRSessionReason reason) {
                 sessionReady = true;
@@ -217,9 +221,39 @@ public class MainActivity extends Activity implements LocationListener {
             }
             @Override public void onSessionUnavailable(CxrDefs.CXRSessionReason reason) {
                 sessionReady = false;
+                appStartRequested = false;
                 setStatus("HI ROKID • RADAR SESSION UNAVAILABLE • " + reason);
             }
         });
+    }
+
+    private void startGlassesRadarApp() {
+        if (appStartRequested) return;
+        appStartRequested = true;
+        cxrLink.appStart("com.inthesky.radar.glasses.MainActivity", new IGlassAppCbk() {
+            @Override public void onInstallAppResult(boolean success) {}
+            @Override public void onUnInstallAppResult(boolean success) {}
+            @Override public void onStopAppResult(boolean success) {}
+            @Override public void onQueryAppResult(boolean installed) {}
+            @Override public void onOpenAppResult(boolean success) {
+                if (success) markRadarSessionReady();
+                else {
+                    appStartRequested = false;
+                    setStatus("HI ROKID • COULD NOT LAUNCH RADAR ON " + connectedDeviceName);
+                }
+            }
+            @Override public void onGlassAppResume(boolean resumed) {
+                if (resumed) markRadarSessionReady();
+            }
+        });
+    }
+
+    private void markRadarSessionReady() {
+        sessionReady = true;
+        glassesConnected = true;
+        setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • RADAR SESSION READY");
+        runOnUiThread(() -> connectButton.setText("REAUTHORIZE HI ROKID"));
+        worker.execute(MainActivity.this::fetchAndSendOnce);
     }
 
     private void authorizeHiRokid() {
@@ -358,6 +392,7 @@ public class MainActivity extends Activity implements LocationListener {
     private synchronized void closeSocket() {
         glassesConnected = false;
         sessionReady = false;
+        appStartRequested = false;
         try { cxrLink.disconnect(); } catch (Exception ignored) {}
     }
 
