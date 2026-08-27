@@ -5,7 +5,6 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
-import android.bluetooth.BluetoothSocket;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -25,7 +24,6 @@ import android.widget.TextView;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
@@ -36,12 +34,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import com.rokid.cxr.Caps;
+import com.rokid.cxr.client.extend.CxrApi;
+import com.rokid.cxr.client.extend.callbacks.BluetoothStatusCallback;
+import com.rokid.cxr.client.utils.ValueUtil;
+
 public class MainActivity extends Activity implements LocationListener {
-    public static final UUID RADAR_UUID = UUID.fromString("9d9a9c20-a3cc-4a20-b5a2-34f5f6b8c701");
+    private static final String RADAR_CHANNEL = "inthesky_radar_state";
     private static final int REQ_PERMS = 501;
     private static final long REFRESH_MS = 30_000L;
 
@@ -49,8 +51,8 @@ public class MainActivity extends Activity implements LocationListener {
     private LocationManager locationManager;
     private Location lastLocation;
     private BluetoothAdapter bluetooth;
-    private BluetoothSocket socket;
-    private BufferedOutputStream out;
+    private final CxrApi cxr = CxrApi.getInstance();
+    private volatile boolean glassesConnected = false;
     private volatile boolean running = true;
     private int rangeMiles = 25;
     private volatile long lastSuccessMs = 0L;
@@ -191,18 +193,27 @@ public class MainActivity extends Activity implements LocationListener {
     }
 
     private void connect(BluetoothDevice device) {
-        setStatus("CONNECTING TO " + safeName(device));
-        worker.execute(() -> {
-            try {
-                closeSocket();
-                if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return;
-                socket = device.createRfcommSocketToServiceRecord(RADAR_UUID);
-                socket.connect();
-                out = new BufferedOutputStream(socket.getOutputStream());
-                setStatus("GLASSES CONNECTED • " + safeName(device));
+        setStatus("CXR • CONNECTING TO " + safeName(device));
+        try { cxr.deinitBluetooth(); } catch (Exception ignored) {}
+        glassesConnected = false;
+        cxr.initBluetooth(this, device, new BluetoothStatusCallback() {
+            @Override public void onConnectionInfo(String socketUuid, String macAddress, String deviceName, int protocolVersion) {
+                setStatus("CXR LINK FOUND • AUTHENTICATING");
+            }
+            @Override public void onConnected() {
+                glassesConnected = true;
+                setStatus("CXR • GLASSES CONNECTED • " + safeName(device));
                 runOnUiThread(() -> connectButton.setText("RECONNECT / CHANGE GLASSES"));
-                fetchAndSendOnce();
-            } catch (Exception e) { closeSocket(); setStatus("GLASSES CONNECTION FAILED"); }
+                worker.execute(MainActivity.this::fetchAndSendOnce);
+            }
+            @Override public void onDisconnected() {
+                glassesConnected = false;
+                setStatus("CXR • GLASSES DISCONNECTED");
+            }
+            @Override public void onFailed(ValueUtil.CxrBluetoothErrorCode errorCode) {
+                glassesConnected = false;
+                setStatus("CXR CONNECTION FAILED • " + String.valueOf(errorCode));
+            }
         });
     }
 
@@ -219,7 +230,7 @@ public class MainActivity extends Activity implements LocationListener {
 
     private void fetchAndSendOnce() {
         Location loc = lastLocation;
-        if (loc == null) { setStatus(out == null ? "WAITING FOR GPS • GLASSES DISCONNECTED" : "WAITING FOR GPS • GLASSES CONNECTED"); return; }
+        if (loc == null) { setStatus(!glassesConnected ? "WAITING FOR GPS • GLASSES DISCONNECTED" : "WAITING FOR GPS • GLASSES CONNECTED"); return; }
         Exception lastError = null;
         for (int attempt=1; attempt<=3; attempt++) {
             try {
@@ -229,7 +240,7 @@ public class MainActivity extends Activity implements LocationListener {
                 int count = packet.getJSONArray("aircraft").length();
                 runOnUiThread(() -> { aircraftLabel.setText(count + (count==1 ? " CONTACT" : " CONTACTS")); lastUpdateLabel.setText("LAST LIVE UPDATE  JUST NOW"); });
                 sendPacket(packet);
-                if (out == null) setStatus("LIVE • PHONE RADAR • " + rangeMiles + " MI");
+                if (!glassesConnected) setStatus("LIVE • PHONE RADAR • " + rangeMiles + " MI");
                 return;
             } catch (Exception e) {
                 lastError=e;
@@ -264,7 +275,7 @@ public class MainActivity extends Activity implements LocationListener {
             "https://opensky-network.org/api/states/all?lamin=%.5f&lamax=%.5f&lomin=%.5f&lomax=%.5f",
             lat-latDelta, lat+latDelta, lon-lonDelta, lon+lonDelta);
         HttpURLConnection c = (HttpURLConnection)new URL(u).openConnection();
-        c.setConnectTimeout(15000); c.setReadTimeout(15000); c.setUseCaches(false); c.setRequestProperty("Accept","application/json"); c.setRequestProperty("Connection","close"); c.setRequestProperty("User-Agent","InTheSky-Rokid-Radar/0.3");
+        c.setConnectTimeout(15000); c.setReadTimeout(15000); c.setUseCaches(false); c.setRequestProperty("Accept","application/json"); c.setRequestProperty("Connection","close"); c.setRequestProperty("User-Agent","InTheSky-Rokid-Radar/0.4");
         int code = c.getResponseCode();
         if (code < 200 || code >= 300) throw new Exception("HTTP " + code);
         StringBuilder sb = new StringBuilder();
@@ -305,17 +316,21 @@ public class MainActivity extends Activity implements LocationListener {
     private static double round1(double v) { return Math.round(v*10.0)/10.0; }
 
     private synchronized void sendPacket(JSONObject packet) {
-        if (out == null) return;
+        if (!glassesConnected || !cxr.isBluetoothConnected()) return;
         try {
-            byte[] b = (packet.toString()+"\n").getBytes(StandardCharsets.UTF_8);
-            out.write(b); out.flush();
-            setStatus("LIVE • GLASSES CONNECTED • " + rangeMiles + " MI");
-        } catch (Exception e) { closeSocket(); setStatus("GLASSES LINK LOST"); }
+            Caps args = new Caps();
+            args.write(packet.toString());
+            ValueUtil.CxrStatus result = cxr.sendCustomCmd(RADAR_CHANNEL, args);
+            setStatus("LIVE • CXR GLASSES CONNECTED • " + rangeMiles + " MI");
+        } catch (Exception e) {
+            glassesConnected = false;
+            setStatus("CXR SEND FAILED • " + shortMsg(e));
+        }
     }
 
     private synchronized void closeSocket() {
-        try { if(out!=null) out.close(); } catch(Exception ignored){} out=null;
-        try { if(socket!=null) socket.close(); } catch(Exception ignored){} socket=null;
+        glassesConnected = false;
+        try { cxr.deinitBluetooth(); } catch (Exception ignored) {}
     }
 
     private void setStatus(String s) { runOnUiThread(() -> status.setText(s)); }

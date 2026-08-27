@@ -6,9 +6,14 @@ android {
 
     defaultConfig {
         applicationId 'com.inthesky.radar.glasses'
-        minSdk 26
+        minSdk 28
         targetSdk 34
-        versionCode 1
-        versionName '0.1.0'
+        versionCode 4
+        versionName '0.4.0'
     }
+}
+
+
+dependencies {
+    implementation 'com.rokid.cxr:client-m:1.0.8'
 }

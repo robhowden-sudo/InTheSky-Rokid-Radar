@@ -68,3 +68,13 @@ The debug APKs are automatically signed with Android's debug signing key and are
 
 ## v0.3
 Phone networking retries, last-good contact preservation, last-live-update age, and persistent radar range.
+
+
+## v0.4 - Rokid CXR transport
+- Replaces the fixed generic RFCOMM UUID with Rokid CXR-M 1.0.8 on the phone.
+- Phone uses CxrApi.initBluetooth() so Rokid performs BLE discovery, obtains the glasses RFCOMM service and starts the CXR protocol.
+- Radar state is sent as JSON in a Caps string using the custom command channel `inthesky_radar_state`.
+- Glasses module subscribes through CXRServiceBridge (CXR-S) and feeds received radar JSON into the existing HUD renderer.
+- OpenSky, GPS, 1-200 mile range and radar packet format are otherwise unchanged from v0.3.
+
+This is an integration/test build. CXR availability still depends on the Rokid firmware/SDK environment on the target glasses.

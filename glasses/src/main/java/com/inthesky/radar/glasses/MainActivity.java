@@ -1,16 +1,10 @@
 package com.inthesky.radar.glasses;
 
-import android.Manifest;
 import android.app.Activity;
-import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothServerSocket;
-import android.bluetooth.BluetoothSocket;
-import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.view.WindowManager;
@@ -18,25 +12,19 @@ import android.view.WindowManager;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
+import com.rokid.cxr.CXRServiceBridge;
+import com.rokid.cxr.Caps;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    public static final UUID RADAR_UUID = UUID.fromString("9d9a9c20-a3cc-4a20-b5a2-34f5f6b8c701");
-    private static final int REQ_BT = 601;
+    private static final String RADAR_CHANNEL = "inthesky_radar_state";
     private RadarView radar;
-    private final ExecutorService serverWorker = Executors.newSingleThreadExecutor();
     private volatile boolean running = true;
-    private BluetoothServerSocket serverSocket;
-    private BluetoothSocket clientSocket;
+    private CXRServiceBridge cxrBridge;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -47,50 +35,37 @@ public class MainActivity extends Activity {
             View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
         radar = new RadarView();
         setContentView(radar);
-        requestBtAndStart();
+        startCxrReceiver();
     }
 
-    private void requestBtAndStart() {
-        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE}, REQ_BT);
-        } else startServer();
-    }
-
-    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
-        super.onRequestPermissionsResult(requestCode, permissions, results);
-        if (requestCode == REQ_BT) startServer();
-    }
-
-    private void startServer() {
-        serverWorker.execute(() -> {
-            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
-            if (adapter == null) { radar.setLinkState("NO BLUETOOTH"); return; }
-            while (running) {
-                try {
-                    if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return;
-                    radar.setLinkState("WAITING FOR PHONE");
-                    serverSocket = adapter.listenUsingRfcommWithServiceRecord("InTheSkyRadar", RADAR_UUID);
-                    clientSocket = serverSocket.accept();
-                    radar.setLinkState("PHONE CONNECTED");
-                    try (BufferedReader br = new BufferedReader(new InputStreamReader(clientSocket.getInputStream(), StandardCharsets.UTF_8))) {
-                        String line;
-                        while (running && (line = br.readLine()) != null) {
-                            try { radar.applyPacket(new JSONObject(line)); } catch(Exception ignored) {}
+    private void startCxrReceiver() {
+        try {
+            cxrBridge = new CXRServiceBridge();
+            cxrBridge.setStatusListener(new CXRServiceBridge.StatusListener() {
+                @Override public void onConnected(String deviceInfo, int deviceType) { radar.setLinkState("CXR • PHONE CONNECTED"); }
+                @Override public void onDisconnected() { radar.setLinkState("CXR • WAITING FOR PHONE"); }
+                @Override public void onARTCStatus(float quality, boolean isHealthy) {}
+                @Override public void onRokidAccountChanged(String account) {}
+            });
+            int result = cxrBridge.subscribe(RADAR_CHANNEL, new CXRServiceBridge.MsgCallback() {
+                @Override public void onReceive(String channel, Caps args, byte[] data) {
+                    try {
+                        String json = null;
+                        for (int i=0; i<args.size(); i++) {
+                            Caps.Value v = args.at(i);
+                            if (v != null && v.type() == Caps.Value.TYPE_STRING) { json = v.getString(); break; }
                         }
-                    }
-                } catch (Exception ignored) {
-                    if (running) radar.setLinkState("LINK LOST • WAITING");
-                } finally { closeSockets(); }
-            }
-        });
+                        if (json != null) radar.applyPacket(new JSONObject(json));
+                    } catch (Exception ignored) {}
+                }
+            });
+            radar.setLinkState(result == 0 ? "CXR • WAITING FOR PHONE" : "CXR SUBSCRIBE • " + result);
+        } catch (Throwable t) {
+            radar.setLinkState("CXR SERVICE UNAVAILABLE");
+        }
     }
 
-    private void closeSockets() {
-        try { if(clientSocket!=null) clientSocket.close(); } catch(Exception ignored){} clientSocket=null;
-        try { if(serverSocket!=null) serverSocket.close(); } catch(Exception ignored){} serverSocket=null;
-    }
-
-    @Override protected void onDestroy() { running=false; closeSockets(); serverWorker.shutdownNow(); super.onDestroy(); }
+    @Override protected void onDestroy() { running=false; super.onDestroy(); }
 
     private class RadarView extends View {
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
