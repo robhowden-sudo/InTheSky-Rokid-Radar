@@ -14,8 +14,11 @@ import android.util.Pair;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
+import android.text.InputType;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
@@ -24,9 +27,11 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.UnknownHostException;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -70,6 +75,11 @@ public class MainActivity extends Activity implements LocationListener {
     private int rangeMiles = 25;
     private volatile long lastSuccessMs = 0L;
     private volatile JSONObject lastGoodPacket = null;
+    private volatile String openskyToken = null;
+    private volatile long openskyTokenExpiryMs = 0L;
+    private volatile long openskyRetryAfterMs = 0L;
+    private String openskyClientId = "";
+    private String openskyClientSecret = "";
 
     private TextView status;
     private TextView rangeLabel;
@@ -85,6 +95,8 @@ public class MainActivity extends Activity implements LocationListener {
         cxrLink = new CXRLink(this);
         configureHiRokidLink();
         rangeMiles = Math.max(1, Math.min(200, getPreferences(MODE_PRIVATE).getInt("range_miles", 25)));
+        openskyClientId = getPreferences(MODE_PRIVATE).getString("opensky_client_id", "");
+        openskyClientSecret = getPreferences(MODE_PRIVATE).getString("opensky_client_secret", "");
         setContentView(buildUi());
         Intent keepAlive = new Intent(this, RadarKeepAliveService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(keepAlive); else startService(keepAlive);
@@ -126,7 +138,7 @@ public class MainActivity extends Activity implements LocationListener {
                 rangeLabel.setText("RADAR RANGE  " + rangeMiles + " MI");
             }
             public void onStartTrackingTouch(SeekBar s) {}
-            public void onStopTrackingTouch(SeekBar s) { getPreferences(MODE_PRIVATE).edit().putInt("range_miles", rangeMiles).apply(); worker.execute(MainActivity.this::fetchAndSendOnce); }
+            public void onStopTrackingTouch(SeekBar s) { getPreferences(MODE_PRIVATE).edit().putInt("range_miles", rangeMiles).apply(); sendSettingsPacket(); worker.execute(MainActivity.this::fetchAndSendOnce); }
         });
         root.addView(range, new LinearLayout.LayoutParams(-1,-2));
 
@@ -135,6 +147,16 @@ public class MainActivity extends Activity implements LocationListener {
         root.addView(aircraftLabel);
         lastUpdateLabel = text("LAST LIVE UPDATE  --", 13, Color.rgb(174,244,202));
         root.addView(lastUpdateLabel);
+
+        TextView authTitle = text("OPENSKY API  •  OPTIONAL", 16, green);
+        authTitle.setPadding(0,28,0,8); root.addView(authTitle);
+        EditText clientId = new EditText(this); clientId.setHint("OpenSky Client ID"); clientId.setText(openskyClientId); clientId.setTextColor(green); clientId.setHintTextColor(Color.rgb(100,170,130)); root.addView(clientId);
+        EditText clientSecret = new EditText(this); clientSecret.setHint("OpenSky Client Secret"); clientSecret.setText(openskyClientSecret); clientSecret.setTextColor(green); clientSecret.setHintTextColor(Color.rgb(100,170,130)); clientSecret.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD); root.addView(clientSecret);
+        Button saveOpenSky = new Button(this); saveOpenSky.setText("SAVE OPENSKY CREDENTIALS"); saveOpenSky.setOnClickListener(v -> {
+            openskyClientId=clientId.getText().toString().trim(); openskyClientSecret=clientSecret.getText().toString().trim();
+            getPreferences(MODE_PRIVATE).edit().putString("opensky_client_id",openskyClientId).putString("opensky_client_secret",openskyClientSecret).apply();
+            openskyToken=null; openskyTokenExpiryMs=0; openskyRetryAfterMs=0; setStatus(openskyClientId.isEmpty()?"OPENSKY ANONYMOUS MODE":"OPENSKY CREDENTIALS SAVED • AUTHENTICATING"); worker.execute(MainActivity.this::fetchAndSendOnce);
+        }); root.addView(saveOpenSky,new LinearLayout.LayoutParams(-1,-2));
 
         TextView note = text("The phone handles GPS + OpenSky. Hi Rokid keeps ownership of the glasses connection and carries radar data to the HUD.\n\nKeep the glasses connected in Hi Rokid, then authorize this app.", 15, Color.rgb(174,244,202));
         note.setPadding(0,24,0,24);
@@ -149,7 +171,7 @@ public class MainActivity extends Activity implements LocationListener {
         });
         root.addView(hiRokid, new LinearLayout.LayoutParams(-1,-2));
 
-        return root;
+        ScrollView scroll=new ScrollView(this); scroll.setFillViewport(true); scroll.addView(root); return scroll;
     }
 
     private TextView text(String s, float sp, int color) {
@@ -245,6 +267,7 @@ public class MainActivity extends Activity implements LocationListener {
                 sessionReadyMs = System.currentTimeMillis();
                 setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • RADAR SESSION READY");
                 runOnUiThread(() -> connectButton.setText("REAUTHORIZE HI ROKID"));
+                sendSettingsPacket();
                 worker.execute(MainActivity.this::fetchAndSendOnce);
                 startDeliveryBurst();
             }
@@ -288,6 +311,7 @@ public class MainActivity extends Activity implements LocationListener {
         sessionReadyMs = System.currentTimeMillis();
         setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • RADAR SESSION READY");
         runOnUiThread(() -> connectButton.setText("REAUTHORIZE HI ROKID"));
+        sendSettingsPacket();
         worker.execute(MainActivity.this::fetchAndSendOnce);
         startDeliveryBurst();
     }
@@ -380,6 +404,10 @@ public class MainActivity extends Activity implements LocationListener {
     private void fetchAndSendOnce() {
         Location loc = lastLocation;
         if (loc == null) { setStatus(!glassesConnected ? "WAITING FOR GPS • GLASSES DISCONNECTED" : "WAITING FOR GPS • GLASSES CONNECTED"); return; }
+        if (System.currentTimeMillis() < openskyRetryAfterMs) {
+            long seconds=Math.max(1,(openskyRetryAfterMs-System.currentTimeMillis()+999)/1000);
+            sendSettingsPacket(); setStatus("OPENSKY RATE LIMITED • RETRY IN "+seconds+" SEC"); return;
+        }
         Exception lastError = null;
         for (int attempt=1; attempt<=3; attempt++) {
             try {
@@ -393,12 +421,24 @@ public class MainActivity extends Activity implements LocationListener {
                 return;
             } catch (Exception e) {
                 lastError=e;
+                if (shortMsg(e).startsWith("RATE LIMITED")) break;
                 if (attempt<3) try { Thread.sleep(attempt*1500L); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
             }
         }
         updateLastSuccessAge();
         setStatus((lastGoodPacket != null ? "OFFLINE • USING LAST CONTACTS • " : "OPENSKY OFFLINE • ") + friendlyNetworkError(lastError));
         if (lastGoodPacket != null) sendPacket(lastGoodPacket);
+        else sendSettingsPacket();
+    }
+
+    private void sendSettingsPacket() {
+        if (!glassesConnected || !sessionReady) return;
+        try {
+            JSONObject packet=lastGoodPacket==null?new JSONObject():new JSONObject(lastGoodPacket.toString());
+            packet.put("type","radar_state"); packet.put("v",1); packet.put("time",System.currentTimeMillis()); packet.put("rangeMi",rangeMiles);
+            if(!packet.has("aircraft"))packet.put("aircraft",new JSONArray());
+            sendPacket(packet);
+        } catch(Exception ignored) {}
     }
 
     private void updateLastSuccessAge() {
@@ -425,7 +465,10 @@ public class MainActivity extends Activity implements LocationListener {
             lat-latDelta, lat+latDelta, lon-lonDelta, lon+lonDelta);
         HttpURLConnection c = (HttpURLConnection)new URL(u).openConnection();
         c.setConnectTimeout(15000); c.setReadTimeout(15000); c.setUseCaches(false); c.setRequestProperty("Accept","application/json"); c.setRequestProperty("Connection","close"); c.setRequestProperty("User-Agent","InTheSky-Rokid-Radar/0.4");
+        String bearer=getOpenSkyToken(); if(bearer!=null)c.setRequestProperty("Authorization","Bearer "+bearer);
         int code = c.getResponseCode();
+        if(code==429){long retry=60;try{retry=Long.parseLong(c.getHeaderField("X-Rate-Limit-Retry-After-Seconds"));}catch(Exception ignored){} openskyRetryAfterMs=System.currentTimeMillis()+Math.max(30,retry)*1000L;throw new Exception("RATE LIMITED • RETRY IN "+retry+" SEC");}
+        if(code==401){openskyToken=null;openskyTokenExpiryMs=0;throw new Exception("OPENSKY AUTH FAILED • CHECK CLIENT ID/SECRET");}
         if (code < 200 || code >= 300) throw new Exception("HTTP " + code);
         StringBuilder sb = new StringBuilder();
         try (BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
@@ -462,6 +505,19 @@ public class MainActivity extends Activity implements LocationListener {
         packet.put("type","radar_state"); packet.put("v",1); packet.put("time",System.currentTimeMillis());
         packet.put("rangeMi",rangeMi); packet.put("homeLat",lat); packet.put("homeLon",lon); packet.put("northUp",true); packet.put("aircraft",aircraft);
         return packet;
+    }
+
+    private synchronized String getOpenSkyToken() throws Exception {
+        if(openskyClientId.isEmpty()||openskyClientSecret.isEmpty())return null;
+        if(openskyToken!=null&&System.currentTimeMillis()<openskyTokenExpiryMs-30_000L)return openskyToken;
+        HttpURLConnection c=(HttpURLConnection)new URL("https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token").openConnection();
+        c.setRequestMethod("POST");c.setDoOutput(true);c.setConnectTimeout(12000);c.setReadTimeout(12000);c.setRequestProperty("Content-Type","application/x-www-form-urlencoded");
+        String body="grant_type=client_credentials&client_id="+URLEncoder.encode(openskyClientId,"UTF-8")+"&client_secret="+URLEncoder.encode(openskyClientSecret,"UTF-8");
+        try(OutputStream out=c.getOutputStream()){out.write(body.getBytes(StandardCharsets.UTF_8));}
+        int code=c.getResponseCode();if(code<200||code>=300)throw new Exception("OPENSKY AUTH HTTP "+code);
+        StringBuilder sb=new StringBuilder();try(BufferedReader br=new BufferedReader(new InputStreamReader(c.getInputStream(),StandardCharsets.UTF_8))){String line;while((line=br.readLine())!=null)sb.append(line);}
+        JSONObject data=new JSONObject(sb.toString());openskyToken=data.optString("access_token","");if(openskyToken.isEmpty())throw new Exception("OPENSKY AUTH TOKEN MISSING");
+        openskyTokenExpiryMs=System.currentTimeMillis()+Math.max(60,data.optLong("expires_in",300))*1000L;return openskyToken;
     }
 
     private static double normalizeBearing(double b) { b %= 360.0; return b < 0 ? b + 360.0 : b; }
