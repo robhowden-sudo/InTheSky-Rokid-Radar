@@ -35,6 +35,8 @@ public class MainActivity extends Activity implements SensorEventListener {
     private RadarView radar;
     private volatile boolean running = true;
     private CXRServiceBridge cxrBridge;
+    private volatile boolean cxrConnected = false;
+    private int cxrAttempt = 0;
     private SensorManager sensors;
     private Sensor rotationSensor;
     private ToneGenerator tone;
@@ -50,7 +52,9 @@ public class MainActivity extends Activity implements SensorEventListener {
         setContentView(radar);
         sensors = (SensorManager)getSystemService(SENSOR_SERVICE);
         rotationSensor = sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
-        startCxrReceiver();
+        // Hi Rokid reports the session before its glasses endpoint is always
+        // ready. Attaching a moment later avoids the first-launch race.
+        radar.postDelayed(this::startCxrReceiver, 1500L);
     }
 
     @Override protected void onResume() {
@@ -80,12 +84,13 @@ public class MainActivity extends Activity implements SensorEventListener {
     }
 
     private void startCxrReceiver() {
+        final int attempt = ++cxrAttempt;
         try {
             cxrBridge = new CXRServiceBridge();
             cxrBridge.setStatusListener(new CXRServiceBridge.StatusListener() {
                 @Override public void onConnecting(String d,String m,int t){radar.setLinkState("CXR • CONNECTING");}
-                @Override public void onConnected(String d,String m,int t){radar.setLinkState("CXR • PHONE CONNECTED");}
-                @Override public void onDisconnected(){radar.setLinkState("CXR • WAITING FOR PHONE");}
+                @Override public void onConnected(String d,String m,int t){cxrConnected=true;cxrAttempt=0;radar.setLinkState("CXR • PHONE CONNECTED");}
+                @Override public void onDisconnected(){cxrConnected=false;radar.setLinkState("CXR • WAITING FOR PHONE");scheduleCxrRetry();}
                 @Override public void onARTCStatus(float q,boolean h){}
                 @Override public void onRokidAccountChanged(String a){}
                 @Override public void onAudioNoise(float n){}
@@ -95,12 +100,22 @@ public class MainActivity extends Activity implements SensorEventListener {
                     try{
                         String json=null;
                         for(int i=0;i<args.size();i++){Caps.Value v=args.at(i);if(v!=null&&v.type()==Caps.Value.TYPE_STRING){json=v.getString();break;}}
-                        if(json!=null) radar.applyPacket(new JSONObject(json));
+                        if(json!=null){cxrConnected=true;radar.applyPacket(new JSONObject(json));}
                     }catch(Exception ignored){}
                 }
             });
             radar.setLinkState(result==0?"CXR • WAITING FOR PHONE":"CXR SUBSCRIBE • "+result);
+            radar.postDelayed(() -> {
+                if(running && !cxrConnected && cxrAttempt==attempt) scheduleCxrRetry();
+            }, 4000L);
         }catch(Throwable t){radar.setLinkState("CXR SERVICE UNAVAILABLE");}
+    }
+
+    private void scheduleCxrRetry(){
+        if(!running || cxrConnected || cxrAttempt>=5)return;
+        final int expected=cxrAttempt;
+        radar.setLinkState("CXR • RETRYING PHONE  "+(expected+1)+"/5");
+        radar.postDelayed(()->{if(running&&!cxrConnected&&cxrAttempt==expected)startCxrReceiver();},1200L);
     }
 
     private void ping(){try{tone.startTone(ToneGenerator.TONE_PROP_BEEP,180);}catch(Exception ignored){}}
