@@ -5,6 +5,10 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.bluetooth.le.BluetoothLeScanner;
+import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -13,6 +17,8 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
@@ -33,7 +39,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -92,8 +97,8 @@ public class MainActivity extends Activity implements LocationListener {
         root.addView(status);
 
         connectButton = new Button(this);
-        connectButton.setText("CONNECT ROKID GLASSES");
-        connectButton.setOnClickListener(v -> choosePairedDevice());
+        connectButton.setText("SCAN FOR ROKID GLASSES");
+        connectButton.setOnClickListener(v -> scanForGlasses());
         root.addView(connectButton, new LinearLayout.LayoutParams(-1,-2));
 
         rangeLabel = text("RADAR RANGE  " + rangeMiles + " MI", 18, green);
@@ -119,7 +124,7 @@ public class MainActivity extends Activity implements LocationListener {
         lastUpdateLabel = text("LAST LIVE UPDATE  --", 13, Color.rgb(174,244,202));
         root.addView(lastUpdateLabel);
 
-        TextView note = text("The phone handles GPS + OpenSky. The glasses only draw the HUD.\n\nPair the Rokid glasses in Android Bluetooth settings first, then connect here.", 15, Color.rgb(174,244,202));
+        TextView note = text("The phone handles GPS + OpenSky. The glasses only draw the HUD.\n\nPut the Rokid glasses in pairing/discovery mode, then scan here. Select the live BLE result rather than a saved paired-device entry.", 15, Color.rgb(174,244,202));
         note.setPadding(0,24,0,24);
         root.addView(note);
 
@@ -141,6 +146,8 @@ public class MainActivity extends Activity implements LocationListener {
             needed.add(Manifest.permission.ACCESS_FINE_LOCATION);
         if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
             needed.add(Manifest.permission.BLUETOOTH_CONNECT);
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
+            needed.add(Manifest.permission.BLUETOOTH_SCAN);
         if (!needed.isEmpty()) requestPermissions(needed.toArray(new String[0]), REQ_PERMS);
         else startLocation();
     }
@@ -166,30 +173,78 @@ public class MainActivity extends Activity implements LocationListener {
 
     @Override public void onLocationChanged(Location l) { lastLocation = l; }
 
-    private void choosePairedDevice() {
+    private void scanForGlasses() {
         if (bluetooth == null) { setStatus("BLUETOOTH NOT AVAILABLE"); return; }
-        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+        if (Build.VERSION.SDK_INT >= 31 &&
+            (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED ||
+             checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)) {
             requestPermissionsIfNeeded(); return;
         }
-        Set<BluetoothDevice> bonded = bluetooth.getBondedDevices();
-        if (bonded == null || bonded.isEmpty()) {
-            new AlertDialog.Builder(this).setTitle("No paired devices")
-                .setMessage("Pair the Rokid glasses in Android Bluetooth settings first.")
-                .setPositiveButton("Bluetooth settings", (d,w) -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)))
-                .setNegativeButton("Cancel", null).show();
+        if (!bluetooth.isEnabled()) {
+            setStatus("TURN BLUETOOTH ON, THEN SCAN AGAIN");
+            startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
             return;
         }
-        List<BluetoothDevice> devices = new ArrayList<>(bonded);
-        String[] names = new String[devices.size()];
-        int rokidIndex = -1;
-        for (int i=0;i<devices.size();i++) {
-            String n = devices.get(i).getName();
-            names[i] = (n == null ? "Unknown device" : n) + "\n" + devices.get(i).getAddress();
-            if (n != null && n.toLowerCase(Locale.ROOT).contains("rokid")) rokidIndex = i;
+        BluetoothLeScanner scanner = bluetooth.getBluetoothLeScanner();
+        if (scanner == null) {
+            setStatus("BLE SCANNER UNAVAILABLE • RESTART BLUETOOTH");
+            return;
         }
-        final int suggested = rokidIndex;
-        new AlertDialog.Builder(this).setTitle(suggested >= 0 ? "Select Rokid glasses" : "Select paired glasses")
-            .setItems(names, (d,which) -> connect(devices.get(which))).show();
+
+        ArrayList<BluetoothDevice> devices = new ArrayList<>();
+        ScanCallback callback = new ScanCallback() {
+            @Override public void onScanResult(int callbackType, ScanResult result) {
+                BluetoothDevice device = result.getDevice();
+                for (BluetoothDevice found : devices) {
+                    if (found.getAddress().equals(device.getAddress())) return;
+                }
+                devices.add(device);
+                String name = safeName(device);
+                if (name.toLowerCase(Locale.ROOT).contains("rokid") ||
+                    name.toLowerCase(Locale.ROOT).contains("glass")) {
+                    setStatus("ROKID BLE FOUND • " + name);
+                }
+            }
+
+            @Override public void onScanFailed(int errorCode) {
+                setStatus("BLE SCAN FAILED • " + errorCode);
+            }
+        };
+
+        setStatus("SCANNING FOR ROKID BLE • PUT GLASSES IN PAIRING MODE");
+        connectButton.setEnabled(false);
+        scanner.startScan(null, new ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), callback);
+
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            try { scanner.stopScan(callback); } catch (Exception ignored) {}
+            connectButton.setEnabled(true);
+            showScannedDevices(devices);
+        }, 12_000L);
+    }
+
+    private void showScannedDevices(List<BluetoothDevice> devices) {
+        if (devices.isEmpty()) {
+            setStatus("NO BLE GLASSES FOUND");
+            new AlertDialog.Builder(this).setTitle("No Rokid BLE signal found")
+                .setMessage("Put the glasses in pairing/discovery mode and make sure another phone or the Hi Rokid app is not holding the connection, then scan again.")
+                .setPositiveButton("Scan again", (d,w) -> scanForGlasses())
+                .setNegativeButton("Bluetooth settings", (d,w) -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)))
+                .show();
+            return;
+        }
+        ArrayList<BluetoothDevice> ordered = new ArrayList<>();
+        for (BluetoothDevice device : devices) {
+            String name = safeName(device).toLowerCase(Locale.ROOT);
+            if (name.contains("rokid") || name.contains("glass")) ordered.add(device);
+        }
+        for (BluetoothDevice device : devices) if (!ordered.contains(device)) ordered.add(device);
+
+        String[] names = new String[ordered.size()];
+        for (int i=0; i<ordered.size(); i++) names[i] = safeName(ordered.get(i)) + "\n" + ordered.get(i).getAddress();
+        new AlertDialog.Builder(this).setTitle("Select live Rokid BLE device")
+            .setItems(names, (d,which) -> connect(ordered.get(which)))
+            .setNegativeButton("Cancel", null).show();
     }
 
     private void connect(BluetoothDevice device) {
