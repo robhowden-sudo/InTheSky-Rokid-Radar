@@ -122,7 +122,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             bright.setColor(Color.rgb(150,255,190));bright.setStyle(Paint.Style.FILL);bright.setTextAlign(Paint.Align.CENTER);
             fill.setColor(Color.argb(45,79,255,159));fill.setStyle(Paint.Style.FILL);
             selected.setColor(Color.YELLOW);selected.setStyle(Paint.Style.STROKE);selected.setStrokeWidth(2.5f);
-            map.setColor(Color.argb(48,90,180,130));map.setStyle(Paint.Style.STROKE);map.setStrokeWidth(1f);
+            map.setColor(Color.argb(18,90,180,130));map.setStyle(Paint.Style.STROKE);map.setStrokeWidth(1f);
             post(animator);
         }
         private final Runnable animator=new Runnable(){public void run(){sweepDeg=(sweepDeg+2.2f)%360f;invalidate();if(running)postDelayed(this,33);}};

@@ -52,13 +52,14 @@ public class MainActivity extends Activity implements LocationListener {
 
     // One worker maintains the timed refresh loop; the second handles immediate
     // connect/range-change refreshes instead of leaving them behind its sleep.
-    private final ExecutorService worker = Executors.newFixedThreadPool(2);
+    private final ExecutorService worker = Executors.newFixedThreadPool(3);
     private LocationManager locationManager;
     private Location lastLocation;
     private CXRLink cxrLink;
     private volatile boolean glassesConnected = false;
     private volatile boolean sessionReady = false;
     private volatile boolean appStartRequested = false;
+    private volatile boolean deliveryBurstRunning = false;
     private volatile String connectedDeviceName = "ROKID GLASSES";
     private volatile boolean running = true;
     private int rangeMiles = 25;
@@ -221,6 +222,7 @@ public class MainActivity extends Activity implements LocationListener {
                 setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • RADAR SESSION READY");
                 runOnUiThread(() -> connectButton.setText("REAUTHORIZE HI ROKID"));
                 worker.execute(MainActivity.this::fetchAndSendOnce);
+                startDeliveryBurst();
             }
             @Override public void onSessionPause(CxrDefs.CXRSessionReason reason) {
                 sessionReady = false;
@@ -261,6 +263,25 @@ public class MainActivity extends Activity implements LocationListener {
         setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • RADAR SESSION READY");
         runOnUiThread(() -> connectButton.setText("REAUTHORIZE HI ROKID"));
         worker.execute(MainActivity.this::fetchAndSendOnce);
+        startDeliveryBurst();
+    }
+
+    private synchronized void startDeliveryBurst() {
+        if (deliveryBurstRunning) return;
+        deliveryBurstRunning = true;
+        worker.execute(() -> {
+            try {
+                for (int i=0; i<12 && running && sessionReady; i++) {
+                    JSONObject packet = lastGoodPacket;
+                    if (packet != null) sendPacket(packet);
+                    Thread.sleep(2000L);
+                }
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            } finally {
+                deliveryBurstRunning = false;
+            }
+        });
     }
 
     private void authorizeHiRokid() {
@@ -408,6 +429,7 @@ public class MainActivity extends Activity implements LocationListener {
         glassesConnected = false;
         sessionReady = false;
         appStartRequested = false;
+        deliveryBurstRunning = false;
         try { cxrLink.disconnect(); } catch (Exception ignored) {}
     }
 
