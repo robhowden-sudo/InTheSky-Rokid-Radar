@@ -2,13 +2,6 @@ package com.inthesky.radar.phone;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothDevice;
-import android.bluetooth.le.BluetoothLeScanner;
-import android.bluetooth.le.ScanCallback;
-import android.bluetooth.le.ScanResult;
-import android.bluetooth.le.ScanSettings;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -17,8 +10,6 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
@@ -43,21 +34,27 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import com.rokid.cxr.Caps;
-import com.rokid.cxr.client.extend.CxrApi;
-import com.rokid.cxr.client.extend.callbacks.BluetoothStatusCallback;
-import com.rokid.cxr.client.utils.ValueUtil;
+import com.rokid.cxr.link.CXRLink;
+import com.rokid.cxr.link.callbacks.ICXRLinkCbk;
+import com.rokid.cxr.link.callbacks.ICXRSessionCbk;
+import com.rokid.cxr.link.utils.CxrDefs;
+import com.rokid.cxr.link.utils.GlassInfo;
+import com.rokid.sprite.aiapp.externalapp.auth.AuthResult;
+import com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper;
 
 public class MainActivity extends Activity implements LocationListener {
     private static final String RADAR_CHANNEL = "inthesky_radar_state";
     private static final int REQ_PERMS = 501;
+    private static final int REQ_HI_ROKID_AUTH = 502;
     private static final long REFRESH_MS = 30_000L;
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private LocationManager locationManager;
     private Location lastLocation;
-    private BluetoothAdapter bluetooth;
-    private final CxrApi cxr = CxrApi.getInstance();
+    private CXRLink cxrLink;
     private volatile boolean glassesConnected = false;
+    private volatile boolean sessionReady = false;
+    private volatile String connectedDeviceName = "ROKID GLASSES";
     private volatile boolean running = true;
     private int rangeMiles = 25;
     private volatile long lastSuccessMs = 0L;
@@ -73,8 +70,9 @@ public class MainActivity extends Activity implements LocationListener {
         super.onCreate(state);
         getWindow().setStatusBarColor(Color.BLACK);
         getWindow().setNavigationBarColor(Color.BLACK);
-        bluetooth = BluetoothAdapter.getDefaultAdapter();
         locationManager = (LocationManager)getSystemService(LOCATION_SERVICE);
+        cxrLink = new CXRLink(this);
+        configureHiRokidLink();
         rangeMiles = Math.max(1, Math.min(200, getPreferences(MODE_PRIVATE).getInt("range_miles", 25)));
         setContentView(buildUi());
         requestPermissionsIfNeeded();
@@ -97,8 +95,8 @@ public class MainActivity extends Activity implements LocationListener {
         root.addView(status);
 
         connectButton = new Button(this);
-        connectButton.setText("SCAN FOR ROKID GLASSES");
-        connectButton.setOnClickListener(v -> scanForGlasses());
+        connectButton.setText("CONNECT THROUGH HI ROKID");
+        connectButton.setOnClickListener(v -> authorizeHiRokid());
         root.addView(connectButton, new LinearLayout.LayoutParams(-1,-2));
 
         rangeLabel = text("RADAR RANGE  " + rangeMiles + " MI", 18, green);
@@ -124,14 +122,18 @@ public class MainActivity extends Activity implements LocationListener {
         lastUpdateLabel = text("LAST LIVE UPDATE  --", 13, Color.rgb(174,244,202));
         root.addView(lastUpdateLabel);
 
-        TextView note = text("The phone handles GPS + OpenSky. The glasses only draw the HUD.\n\nPut the Rokid glasses in pairing/discovery mode, then scan here. Select the live BLE result rather than a saved paired-device entry.", 15, Color.rgb(174,244,202));
+        TextView note = text("The phone handles GPS + OpenSky. Hi Rokid keeps ownership of the glasses connection and carries radar data to the HUD.\n\nKeep the glasses connected in Hi Rokid, then authorize this app.", 15, Color.rgb(174,244,202));
         note.setPadding(0,24,0,24);
         root.addView(note);
 
-        Button btSettings = new Button(this);
-        btSettings.setText("OPEN BLUETOOTH SETTINGS");
-        btSettings.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
-        root.addView(btSettings, new LinearLayout.LayoutParams(-1,-2));
+        Button hiRokid = new Button(this);
+        hiRokid.setText("OPEN HI ROKID");
+        hiRokid.setOnClickListener(v -> {
+            Intent launch = getPackageManager().getLaunchIntentForPackage("com.rokid.sprite.global.aiapp");
+            if (launch != null) startActivity(launch);
+            else setStatus("HI ROKID APP NOT FOUND");
+        });
+        root.addView(hiRokid, new LinearLayout.LayoutParams(-1,-2));
 
         return root;
     }
@@ -144,10 +146,6 @@ public class MainActivity extends Activity implements LocationListener {
         ArrayList<String> needed = new ArrayList<>();
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
             needed.add(Manifest.permission.ACCESS_FINE_LOCATION);
-        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
-            needed.add(Manifest.permission.BLUETOOTH_CONNECT);
-        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
-            needed.add(Manifest.permission.BLUETOOTH_SCAN);
         if (!needed.isEmpty()) requestPermissions(needed.toArray(new String[0]), REQ_PERMS);
         else startLocation();
     }
@@ -173,107 +171,79 @@ public class MainActivity extends Activity implements LocationListener {
 
     @Override public void onLocationChanged(Location l) { lastLocation = l; }
 
-    private void scanForGlasses() {
-        if (bluetooth == null) { setStatus("BLUETOOTH NOT AVAILABLE"); return; }
-        if (Build.VERSION.SDK_INT >= 31 &&
-            (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED ||
-             checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)) {
-            requestPermissionsIfNeeded(); return;
-        }
-        if (!bluetooth.isEnabled()) {
-            setStatus("TURN BLUETOOTH ON, THEN SCAN AGAIN");
-            startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
-            return;
-        }
-        BluetoothLeScanner scanner = bluetooth.getBluetoothLeScanner();
-        if (scanner == null) {
-            setStatus("BLE SCANNER UNAVAILABLE • RESTART BLUETOOTH");
-            return;
-        }
-
-        ArrayList<BluetoothDevice> devices = new ArrayList<>();
-        ScanCallback callback = new ScanCallback() {
-            @Override public void onScanResult(int callbackType, ScanResult result) {
-                BluetoothDevice device = result.getDevice();
-                for (BluetoothDevice found : devices) {
-                    if (found.getAddress().equals(device.getAddress())) return;
-                }
-                devices.add(device);
-                String name = safeName(device);
-                if (name.toLowerCase(Locale.ROOT).contains("rokid") ||
-                    name.toLowerCase(Locale.ROOT).contains("glass")) {
-                    setStatus("ROKID BLE FOUND • " + name);
+    private void configureHiRokidLink() {
+        cxrLink.setCXRLinkCbk(new ICXRLinkCbk() {
+            @Override public void onCXRLConnected(boolean connected) {
+                setStatus(connected ? "HI ROKID LINK CONNECTED • WAITING FOR GLASSES" : "HI ROKID LINK DISCONNECTED");
+            }
+            @Override public void onGlassBtConnected(boolean connected) {
+                glassesConnected = connected;
+                if (connected) {
+                    setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • STARTING RADAR SESSION");
+                    cxrLink.getGlassDeviceInfo();
+                } else {
+                    sessionReady = false;
+                    setStatus("HI ROKID • GLASSES DISCONNECTED");
                 }
             }
-
-            @Override public void onScanFailed(int errorCode) {
-                setStatus("BLE SCAN FAILED • " + errorCode);
+            @Override public void onGlassDeviceInfo(GlassInfo info) {
+                if (info != null && info.deviceName != null && !info.deviceName.trim().isEmpty())
+                    connectedDeviceName = info.deviceName.trim();
+                setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + (sessionReady ? " • RADAR SESSION READY" : " • STARTING RADAR SESSION"));
             }
-        };
+            @Override public void onGlassWearingStatus(boolean wearing) {}
+            @Override public void onGlassAiAssistStart() {}
+            @Override public void onGlassAiAssistStop() {}
+            @Override public void onGlassAiInterrupt(boolean interrupted) {}
+            @Override public void onGlassLauncherResume() {}
+        });
 
-        setStatus("SCANNING FOR ROKID BLE • PUT GLASSES IN PAIRING MODE");
-        connectButton.setEnabled(false);
-        scanner.startScan(null, new ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), callback);
-
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            try { scanner.stopScan(callback); } catch (Exception ignored) {}
-            connectButton.setEnabled(true);
-            showScannedDevices(devices);
-        }, 12_000L);
-    }
-
-    private void showScannedDevices(List<BluetoothDevice> devices) {
-        if (devices.isEmpty()) {
-            setStatus("NO BLE GLASSES FOUND");
-            new AlertDialog.Builder(this).setTitle("No Rokid BLE signal found")
-                .setMessage("Put the glasses in pairing/discovery mode and make sure another phone or the Hi Rokid app is not holding the connection, then scan again.")
-                .setPositiveButton("Scan again", (d,w) -> scanForGlasses())
-                .setNegativeButton("Bluetooth settings", (d,w) -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)))
-                .show();
-            return;
-        }
-        ArrayList<BluetoothDevice> ordered = new ArrayList<>();
-        for (BluetoothDevice device : devices) {
-            String name = safeName(device).toLowerCase(Locale.ROOT);
-            if (name.contains("rokid") || name.contains("glass")) ordered.add(device);
-        }
-        for (BluetoothDevice device : devices) if (!ordered.contains(device)) ordered.add(device);
-
-        String[] names = new String[ordered.size()];
-        for (int i=0; i<ordered.size(); i++) names[i] = safeName(ordered.get(i)) + "\n" + ordered.get(i).getAddress();
-        new AlertDialog.Builder(this).setTitle("Select live Rokid BLE device")
-            .setItems(names, (d,which) -> connect(ordered.get(which)))
-            .setNegativeButton("Cancel", null).show();
-    }
-
-    private void connect(BluetoothDevice device) {
-        setStatus("CXR • CONNECTING TO " + safeName(device));
-        try { cxr.deinitBluetooth(); } catch (Exception ignored) {}
-        glassesConnected = false;
-        cxr.initBluetooth(this, device, new BluetoothStatusCallback() {
-            @Override public void onConnectionInfo(String socketUuid, String macAddress, String deviceName, int protocolVersion) {
-                setStatus("CXR LINK FOUND • AUTHENTICATING");
+        CxrDefs.CXRSession session = new CxrDefs.CXRSession(
+            CxrDefs.CXRSessionType.CUSTOMAPP, "com.inthesky.radar.glasses");
+        cxrLink.configCXRSession(session, new ICXRSessionCbk() {
+            @Override public void onSessionAvailable(CxrDefs.CXRSessionReason reason) {
+                setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • RADAR SESSION AVAILABLE");
             }
-            @Override public void onConnected() {
+            @Override public void onSessionStart(CxrDefs.CXRSessionReason reason) {
+                sessionReady = true;
                 glassesConnected = true;
-                setStatus("CXR • GLASSES CONNECTED • " + safeName(device));
-                runOnUiThread(() -> connectButton.setText("RECONNECT / CHANGE GLASSES"));
+                setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • RADAR SESSION READY");
+                runOnUiThread(() -> connectButton.setText("REAUTHORIZE HI ROKID"));
                 worker.execute(MainActivity.this::fetchAndSendOnce);
             }
-            @Override public void onDisconnected() {
-                glassesConnected = false;
-                setStatus("CXR • GLASSES DISCONNECTED");
+            @Override public void onSessionPause(CxrDefs.CXRSessionReason reason) {
+                sessionReady = false;
+                setStatus("HI ROKID • RADAR SESSION PAUSED • " + reason);
             }
-            @Override public void onFailed(ValueUtil.CxrBluetoothErrorCode errorCode) {
-                glassesConnected = false;
-                setStatus("CXR CONNECTION FAILED • " + String.valueOf(errorCode));
+            @Override public void onSessionUnavailable(CxrDefs.CXRSessionReason reason) {
+                sessionReady = false;
+                setStatus("HI ROKID • RADAR SESSION UNAVAILABLE • " + reason);
             }
         });
     }
 
-    private String safeName(BluetoothDevice d) {
-        try { String n=d.getName(); return n==null?d.getAddress():n; } catch(Exception e){ return "ROKID"; }
+    private void authorizeHiRokid() {
+        if (!AuthorizationHelper.INSTANCE.isRequiredHiRokidInstalled(this)) {
+            setStatus("COMPATIBLE HI ROKID APP REQUIRED");
+            return;
+        }
+        setStatus("REQUESTING HI ROKID AUTHORIZATION");
+        AuthorizationHelper.INSTANCE.requestAuthorization(this, REQ_HI_ROKID_AUTH);
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_HI_ROKID_AUTH) return;
+        AuthResult result = AuthorizationHelper.INSTANCE.parseAuthorizationResult(resultCode, data);
+        if (result instanceof AuthResult.AuthSuccess) {
+            String token = ((AuthResult.AuthSuccess)result).getToken();
+            setStatus("HI ROKID AUTHORIZED • CONNECTING");
+            cxrLink.connect(token);
+        } else if (result instanceof AuthResult.AuthCancel) {
+            setStatus("HI ROKID AUTHORIZATION CANCELLED");
+        } else {
+            setStatus("HI ROKID AUTHORIZATION FAILED");
+        }
     }
 
     private void updateLoop() {
@@ -371,21 +341,24 @@ public class MainActivity extends Activity implements LocationListener {
     private static double round1(double v) { return Math.round(v*10.0)/10.0; }
 
     private synchronized void sendPacket(JSONObject packet) {
-        if (!glassesConnected || !cxr.isBluetoothConnected()) return;
+        if (!glassesConnected || !sessionReady) return;
         try {
             Caps args = new Caps();
             args.write(packet.toString());
-            ValueUtil.CxrStatus result = cxr.sendCustomCmd(RADAR_CHANNEL, args);
-            setStatus("LIVE • CXR GLASSES CONNECTED • " + rangeMiles + " MI");
+            Integer result = cxrLink.sendCustomCmd(RADAR_CHANNEL, args);
+            if (result != null && result == 0)
+                setStatus("LIVE • HI ROKID → " + connectedDeviceName + " • " + rangeMiles + " MI");
+            else
+                setStatus("RADAR SEND RESULT " + String.valueOf(result) + " • " + connectedDeviceName);
         } catch (Exception e) {
-            glassesConnected = false;
-            setStatus("CXR SEND FAILED • " + shortMsg(e));
+            setStatus("HI ROKID RADAR SEND FAILED • " + shortMsg(e));
         }
     }
 
     private synchronized void closeSocket() {
         glassesConnected = false;
-        try { cxr.deinitBluetooth(); } catch (Exception ignored) {}
+        sessionReady = false;
+        try { cxrLink.disconnect(); } catch (Exception ignored) {}
     }
 
     private void setStatus(String s) { runOnUiThread(() -> status.setText(s)); }
