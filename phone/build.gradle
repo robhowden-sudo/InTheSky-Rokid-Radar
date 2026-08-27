@@ -8,8 +8,8 @@ android {
         applicationId 'com.inthesky.radar.phone'
         minSdk 28
         targetSdk 34
-        versionCode 31
-        versionName '0.8.5'
+        versionCode 100
+        versionName '1.0.0'
     }
 }
 
