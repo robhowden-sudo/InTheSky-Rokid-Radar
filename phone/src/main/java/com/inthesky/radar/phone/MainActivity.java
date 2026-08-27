@@ -10,6 +10,7 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Pair;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
@@ -262,12 +263,17 @@ public class MainActivity extends Activity implements LocationListener {
             return;
         }
         setStatus("REQUESTING HI ROKID AUTHORIZATION");
-        AuthorizationHelper.INSTANCE.requestAuthorization(this, REQ_HI_ROKID_AUTH);
+        Pair<Integer, Intent> immediate = AuthorizationHelper.INSTANCE.requestAuthorization(this, REQ_HI_ROKID_AUTH);
+        if (immediate != null) handleHiRokidAuthorization(immediate.first, immediate.second);
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQ_HI_ROKID_AUTH) return;
+        handleHiRokidAuthorization(resultCode, data);
+    }
+
+    private void handleHiRokidAuthorization(int resultCode, Intent data) {
         AuthResult result = AuthorizationHelper.INSTANCE.parseAuthorizationResult(resultCode, data);
         if (result instanceof AuthResult.AuthSuccess) {
             String token = ((AuthResult.AuthSuccess)result).getToken();
