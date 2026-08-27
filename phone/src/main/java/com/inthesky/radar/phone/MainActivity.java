@@ -122,7 +122,10 @@ public class MainActivity extends Activity implements LocationListener {
 
         connectButton = new Button(this);
         connectButton.setText("CONNECT THROUGH HI ROKID");
-        connectButton.setOnClickListener(v -> authorizeHiRokid());
+        connectButton.setOnClickListener(v -> {
+            if (glassesConnected && glassesUserClosed) reopenGlassesRadarApp();
+            else authorizeHiRokid();
+        });
         root.addView(connectButton, new LinearLayout.LayoutParams(-1,-2));
 
         rangeLabel = text("RADAR RANGE  " + rangeMiles + " MI", 18, green);
@@ -216,7 +219,9 @@ public class MainActivity extends Activity implements LocationListener {
                     if (!restartInProgress) {
                         glassesUserClosed = true;
                         sessionReady = false;
+                        appStartRequested = false;
                         setStatus("RADAR HUD CLOSED ON GLASSES");
+                        runOnUiThread(() -> connectButton.setText("OPEN RADAR HUD"));
                     }
                     return;
                 }
@@ -257,6 +262,10 @@ public class MainActivity extends Activity implements LocationListener {
             CxrDefs.CXRSessionType.CUSTOMAPP, "com.inthesky.radar.glasses");
         cxrLink.configCXRSession(session, new ICXRSessionCbk() {
             @Override public void onSessionAvailable(CxrDefs.CXRSessionReason reason) {
+                if (glassesUserClosed) {
+                    setStatus("RADAR HUD CLOSED • TAP OPEN RADAR HUD ON PHONE");
+                    return;
+                }
                 setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • LAUNCHING RADAR HUD");
                 startGlassesRadarApp();
             }
@@ -302,6 +311,15 @@ public class MainActivity extends Activity implements LocationListener {
                 if (resumed) markRadarSessionReady();
             }
         });
+    }
+
+    private void reopenGlassesRadarApp() {
+        glassesUserClosed = false;
+        sessionReady = false;
+        appStartRequested = false;
+        lastGlassesAckMs = 0L;
+        setStatus("HI ROKID • REOPENING RADAR HUD");
+        startGlassesRadarApp();
     }
 
     private void markRadarSessionReady() {
