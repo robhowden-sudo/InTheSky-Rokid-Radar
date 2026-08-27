@@ -84,3 +84,10 @@ This is an integration/test build. CXR availability still depends on the Rokid f
 - Updated CXRServiceBridge.StatusListener for Rokid CXR 1.0.8.
 - Added required onConnecting(String, String, int).
 - Updated onConnected to the 1.0.8 three-argument signature.
+
+
+## v0.4.2 glasses runtime fix
+- Uses Rokid CXR-S on-device bridge (`com.rokid.cxr:cxr-service-bridge:1.0-SNAPSHOT`) in the glasses app.
+- Removes the phone-side `client-m` runtime from the glasses APK.
+- Uses the CXR-S `StatusListener` signature (`onConnected(String, int)`).
+- Phone radar/OpenSky logic is unchanged.
