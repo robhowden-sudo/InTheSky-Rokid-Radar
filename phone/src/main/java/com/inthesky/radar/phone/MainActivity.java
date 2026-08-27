@@ -182,11 +182,12 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
         });
         root.addView(range, new LinearLayout.LayoutParams(-1,-2));
 
-        CheckBox compass = new CheckBox(this); compass.setText("AUTO COMPASS ORIENTATION"); compass.setTextColor(green); compass.setChecked(autoCompass);
+        CheckBox compass = new CheckBox(this); compass.setText("AUTO ORIENTATION — USE PHONE COMPASS"); compass.setTextColor(green); compass.setChecked(autoCompass);
         compass.setOnCheckedChangeListener((b,checked)->{autoCompass=checked;getPreferences(MODE_PRIVATE).edit().putBoolean("auto_compass",checked).apply();sendSettingsPacket();}); root.addView(compass);
-        headingLabel=text("COMPASS  0°   CALIBRATION  "+signed(compassOffsetDeg)+"°",14,green); headingLabel.setPadding(0,10,0,4); root.addView(headingLabel);
+        TextView compassNote=text("Radar orientation follows the direction your PHONE is pointing, not the glasses. Keep the phone aligned with your viewing direction.",13,Color.rgb(174,244,202));compassNote.setPadding(0,4,0,8);root.addView(compassNote);
+        headingLabel=text("PHONE COMPASS  0°   OFFSET  "+signed(compassOffsetDeg)+"°",14,green); headingLabel.setPadding(0,10,0,4); root.addView(headingLabel);
         SeekBar calibration=new SeekBar(this); calibration.setMax(360); calibration.setProgress(compassOffsetDeg+180); calibration.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
-            public void onProgressChanged(SeekBar s,int p,boolean user){compassOffsetDeg=p-180;headingLabel.setText("COMPASS  "+Math.round(headingDeg)+"°   CALIBRATION  "+signed(compassOffsetDeg)+"°");}
+            public void onProgressChanged(SeekBar s,int p,boolean user){compassOffsetDeg=p-180;headingLabel.setText("PHONE COMPASS  "+Math.round(headingDeg)+"°   OFFSET  "+signed(compassOffsetDeg)+"°");}
             public void onStartTrackingTouch(SeekBar s){} public void onStopTrackingTouch(SeekBar s){getPreferences(MODE_PRIVATE).edit().putInt("compass_offset",compassOffsetDeg).apply();sendSettingsPacket();}
         }); root.addView(calibration,new LinearLayout.LayoutParams(-1,-2));
 
@@ -271,7 +272,7 @@ public class MainActivity extends Activity implements LocationListener, SensorEv
         float[] rotation=new float[9], orientation=new float[3];
         SensorManager.getRotationMatrixFromVector(rotation,event.values); SensorManager.getOrientation(rotation,orientation);
         headingDeg=(float)normalizeBearing(Math.toDegrees(orientation[0])+compassOffsetDeg);
-        if(headingLabel!=null)runOnUiThread(()->headingLabel.setText("COMPASS  "+Math.round(headingDeg)+"°   CALIBRATION  "+signed(compassOffsetDeg)+"°"));
+        if(headingLabel!=null)runOnUiThread(()->headingLabel.setText("PHONE COMPASS  "+Math.round(headingDeg)+"°   OFFSET  "+signed(compassOffsetDeg)+"°"));
         long now=System.currentTimeMillis(); float change=Math.abs(headingDeg-lastHeadingSentDeg);change=Math.min(change,360f-change);
         if(autoCompass&&sessionReady&&now-lastHeadingSentMs>=150L&&(lastHeadingSentDeg<-360f||change>=1f)&&!orientationSendQueued){
             lastHeadingSentMs=now;lastHeadingSentDeg=headingDeg;orientationSendQueued=true;worker.execute(()->{try{sendOrientationPacket();}finally{orientationSendQueued=false;}});
