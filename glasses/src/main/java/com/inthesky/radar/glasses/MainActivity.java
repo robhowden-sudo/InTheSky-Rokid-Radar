@@ -176,6 +176,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             super.onDraw(c);float w=getWidth(),h=getHeight(),cx=w/2f;float radius=Math.min(w*.43f,h*.34f),cy=Math.min(h*.46f,radius+82f);
             bright.setTextSize(Math.max(15f,w*.038f));bright.setTextAlign(Paint.Align.LEFT);c.drawText("IN THE SKY",18,34,bright);
             bright.setTextAlign(Paint.Align.RIGHT);c.drawText(linkState+"  "+Math.round(headingDeg)+"°",w-18,34,bright);
+            if(lastPacket>0){long age=Math.max(0,(System.currentTimeMillis()-lastPacket)/1000L);String updated=age<3?"UPDATED JUST NOW":age<60?"UPDATED "+age+" SEC AGO":"UPDATED "+(age/60)+" MIN AGO";if(age>45)updated="STALE • "+updated;bright.setTextAlign(Paint.Align.CENTER);bright.setTextSize(Math.max(12f,w*.029f));c.drawText(updated,cx,57,bright);}
             drawMapLayer(c,cx,cy,radius);
             for(int i=1;i<=4;i++)c.drawCircle(cx,cy,radius*i/4f,dim);c.drawLine(cx-radius,cy,cx+radius,cy,dim);c.drawLine(cx,cy-radius,cx,cy+radius,dim);
             drawCardinals(c,cx,cy,radius);
