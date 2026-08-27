@@ -6,7 +6,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.graphics.drawable.ColorDrawable;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -50,7 +49,6 @@ public class MainActivity extends Activity implements SensorEventListener {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().setStatusBarColor(Color.BLACK);
         getWindow().setNavigationBarColor(Color.BLACK);
-        getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
         tone = new ToneGenerator(AudioManager.STREAM_NOTIFICATION, 65);
         radar = new RadarView();
@@ -77,13 +75,13 @@ public class MainActivity extends Activity implements SensorEventListener {
     }
 
     @Override public void onSensorChanged(SensorEvent event) {
-        if(event.sensor.getType()==Sensor.TYPE_ORIENTATION){radar.setHeading((event.values[0]+90f)%360f);return;}
+        if(event.sensor.getType()==Sensor.TYPE_ORIENTATION){radar.setHeading((event.values[0]+270f)%360f);return;}
         float[] matrix=new float[9], orientation=new float[3];
         SensorManager.getRotationMatrixFromVector(matrix,event.values);
         SensorManager.getOrientation(matrix,orientation);
         float heading=(float)Math.toDegrees(orientation[0]);
         if(heading<0) heading+=360f;
-        radar.setHeading((heading+90f)%360f);
+        radar.setHeading((heading+270f)%360f);
     }
     @Override public void onAccuracyChanged(Sensor sensor,int accuracy) {}
 
@@ -130,7 +128,7 @@ public class MainActivity extends Activity implements SensorEventListener {
     @Override protected void onDestroy(){running=false;if(tone!=null)tone.release();super.onDestroy();}
 
     private class RadarView extends View {
-        private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG),dim=new Paint(Paint.ANTI_ALIAS_FLAG),bright=new Paint(Paint.ANTI_ALIAS_FLAG),fill=new Paint(Paint.ANTI_ALIAS_FLAG),selected=new Paint(Paint.ANTI_ALIAS_FLAG),map=new Paint(Paint.ANTI_ALIAS_FLAG),mapLand=new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG),dim=new Paint(Paint.ANTI_ALIAS_FLAG),bright=new Paint(Paint.ANTI_ALIAS_FLAG),fill=new Paint(Paint.ANTI_ALIAS_FLAG),selected=new Paint(Paint.ANTI_ALIAS_FLAG);
         private final List<Contact> contacts=new ArrayList<>();
         private final Set<String> knownIds=new HashSet<>();
         private float sweepDeg=0f,headingDeg=0f,touchX;
@@ -140,14 +138,12 @@ public class MainActivity extends Activity implements SensorEventListener {
         private boolean compassAvailable=false;
 
         RadarView(){
-            super(MainActivity.this);setBackgroundColor(Color.TRANSPARENT);setFocusable(true);
+            super(MainActivity.this);setBackgroundColor(Color.BLACK);setFocusable(true);
             p.setColor(Color.rgb(79,255,159));p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2f);
             dim.setColor(Color.argb(135,79,255,159));dim.setStyle(Paint.Style.STROKE);dim.setStrokeWidth(1.2f);
             bright.setColor(Color.rgb(150,255,190));bright.setStyle(Paint.Style.FILL);bright.setTextAlign(Paint.Align.CENTER);
             fill.setColor(Color.argb(45,79,255,159));fill.setStyle(Paint.Style.FILL);
             selected.setColor(Color.YELLOW);selected.setStyle(Paint.Style.STROKE);selected.setStrokeWidth(2.5f);
-            map.setColor(Color.argb(42,90,180,130));map.setStyle(Paint.Style.STROKE);map.setStrokeWidth(1.1f);
-            mapLand.setColor(Color.argb(18,70,145,105));mapLand.setStyle(Paint.Style.FILL);
             post(animator);
         }
         private final Runnable animator=new Runnable(){public void run(){sweepDeg=(sweepDeg+2.2f)%360f;invalidate();if(running)postDelayed(this,33);}};
@@ -188,7 +184,6 @@ public class MainActivity extends Activity implements SensorEventListener {
             bright.setTextSize(Math.max(15f,w*.038f));bright.setTextAlign(Paint.Align.LEFT);c.drawText("IN THE SKY",18,34,bright);
             bright.setTextAlign(Paint.Align.RIGHT);c.drawText(linkState+"  "+(compassAvailable?Math.round(headingDeg)+"°":"NO COMPASS"),w-18,34,bright);
             if(lastPacket>0){long age=Math.max(0,(System.currentTimeMillis()-lastPacket)/1000L);String updated=age<3?"UPDATED JUST NOW":age<60?"UPDATED "+age+" SEC AGO":"UPDATED "+(age/60)+" MIN AGO";if(age>45)updated="STALE • "+updated;bright.setTextAlign(Paint.Align.CENTER);bright.setTextSize(Math.max(12f,w*.029f));c.drawText(updated,cx,57,bright);}
-            drawMapLayer(c,cx,cy,radius);
             for(int i=1;i<=4;i++)c.drawCircle(cx,cy,radius*i/4f,dim);c.drawLine(cx-radius,cy,cx+radius,cy,dim);c.drawLine(cx,cy-radius,cx,cy+radius,dim);
             drawCardinals(c,cx,cy,radius);
             float displaySweep=(sweepDeg-headingDeg+360f)%360f,a1=(float)Math.toRadians(displaySweep-102f),a2=(float)Math.toRadians(displaySweep-90f);
@@ -199,14 +194,6 @@ public class MainActivity extends Activity implements SensorEventListener {
             if(!snapshot.isEmpty()){Contact n=snapshot.get(Math.min(selectedIndex,snapshot.size()-1));String cs=n.callsign.isEmpty()?n.id.toUpperCase(Locale.ROOT):n.callsign;String alt=n.altitudeKnown?n.altFt+" FT":"ALT UNKNOWN";bright.setTextAlign(Paint.Align.CENTER);bright.setTextSize(Math.max(18f,w*.047f));c.drawText("‹  "+cs+"  "+String.format(Locale.US,"%.1f MI",n.distance)+"  "+alt+"  ›",cx,h-42,bright);}else{bright.setTextAlign(Paint.Align.CENTER);bright.setTextSize(Math.max(16f,w*.043f));c.drawText(lastPacket==0?"AWAITING RADAR DATA":"CLEAR",cx,h-42,bright);}
         }
 
-        private void drawMapLayer(Canvas c,float cx,float cy,float r){
-            c.save();c.clipPath(circlePath(cx,cy,r-3));c.rotate(-headingDeg,cx,cy);
-            Path landA=new Path();landA.moveTo(cx-r,cy-r*.2f);landA.cubicTo(cx-r*.55f,cy-r*.7f,cx-r*.22f,cy-r*.28f,cx-r*.06f,cy+r*.05f);landA.cubicTo(cx-r*.28f,cy+r*.42f,cx-r*.62f,cy+r*.6f,cx-r,cy+r*.42f);landA.close();c.drawPath(landA,mapLand);
-            Path landB=new Path();landB.moveTo(cx+r*.18f,cy-r);landB.cubicTo(cx+r*.65f,cy-r*.7f,cx+r*.48f,cy-r*.18f,cx+r,cy+r*.02f);landB.lineTo(cx+r,cy+r*.62f);landB.cubicTo(cx+r*.62f,cy+r*.45f,cx+r*.4f,cy+r*.1f,cx+r*.12f,cy-r*.12f);landB.close();c.drawPath(landB,mapLand);
-            Path roadA=new Path();roadA.moveTo(cx-r,cy+r*.38f);roadA.cubicTo(cx-r*.35f,cy-r*.48f,cx+r*.15f,cy+r*.52f,cx+r,cy-r*.24f);c.drawPath(roadA,map);
-            Path roadB=new Path();roadB.moveTo(cx-r*.42f,cy-r);roadB.cubicTo(cx-r*.15f,cy-r*.2f,cx+r*.5f,cy-r*.18f,cx+r*.58f,cy+r);c.drawPath(roadB,map);
-            c.restore();
-        }
         private Path circlePath(float x,float y,float r){Path q=new Path();q.addCircle(x,y,r,Path.Direction.CW);return q;}
         private void drawCardinals(Canvas c,float cx,float cy,float r){String[] names={"N","E","S","W"};float[] bearings={0,90,180,270};bright.setTextSize(Math.max(15f,getWidth()*.04f));bright.setTextAlign(Paint.Align.CENTER);for(int i=0;i<4;i++){double a=Math.toRadians(bearings[i]-headingDeg-90);c.drawText(names[i],cx+(float)Math.cos(a)*(r+18),cy+(float)Math.sin(a)*(r+18)+6,bright);}}
         private void drawAircraft(Canvas c,float x,float y,float track,int category,boolean ground){
