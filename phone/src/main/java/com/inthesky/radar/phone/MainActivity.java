@@ -38,6 +38,7 @@ import com.rokid.cxr.Caps;
 import com.rokid.cxr.link.CXRLink;
 import com.rokid.cxr.link.callbacks.ICXRLinkCbk;
 import com.rokid.cxr.link.callbacks.ICXRSessionCbk;
+import com.rokid.cxr.link.callbacks.ICustomCmdCbk;
 import com.rokid.cxr.link.callbacks.IGlassAppCbk;
 import com.rokid.cxr.link.utils.CxrDefs;
 import com.rokid.cxr.link.utils.GlassInfo;
@@ -52,7 +53,7 @@ public class MainActivity extends Activity implements LocationListener {
 
     // One worker maintains the timed refresh loop; the second handles immediate
     // connect/range-change refreshes instead of leaving them behind its sleep.
-    private final ExecutorService worker = Executors.newFixedThreadPool(3);
+    private final ExecutorService worker = Executors.newFixedThreadPool(5);
     private LocationManager locationManager;
     private Location lastLocation;
     private CXRLink cxrLink;
@@ -60,6 +61,9 @@ public class MainActivity extends Activity implements LocationListener {
     private volatile boolean sessionReady = false;
     private volatile boolean appStartRequested = false;
     private volatile boolean deliveryBurstRunning = false;
+    private volatile boolean restartInProgress = false;
+    private volatile long lastGlassesAckMs = 0L;
+    private volatile long sessionReadyMs = 0L;
     private volatile String connectedDeviceName = "ROKID GLASSES";
     private volatile boolean running = true;
     private int rangeMiles = 25;
@@ -85,6 +89,7 @@ public class MainActivity extends Activity implements LocationListener {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(keepAlive); else startService(keepAlive);
         requestPermissionsIfNeeded();
         worker.execute(this::updateLoop);
+        worker.execute(this::ackWatchdog);
     }
 
     private View buildUi() {
@@ -182,6 +187,13 @@ public class MainActivity extends Activity implements LocationListener {
     @Override public void onLocationChanged(Location l) { lastLocation = l; }
 
     private void configureHiRokidLink() {
+        cxrLink.setCXRCustomCmdCbk(new ICustomCmdCbk() {
+            @Override public void onCustomCmdResult(String command, byte[] data) {
+                if (!"inthesky_radar_ack".equals(command)) return;
+                lastGlassesAckMs = System.currentTimeMillis();
+                setStatus("LIVE • HI ROKID → " + connectedDeviceName + " • " + rangeMiles + " MI");
+            }
+        });
         cxrLink.setCXRLinkCbk(new ICXRLinkCbk() {
             @Override public void onCXRLConnected(boolean connected) {
                 setStatus(connected ? "HI ROKID LINK CONNECTED • WAITING FOR GLASSES" : "HI ROKID LINK DISCONNECTED");
@@ -219,6 +231,7 @@ public class MainActivity extends Activity implements LocationListener {
             @Override public void onSessionStart(CxrDefs.CXRSessionReason reason) {
                 sessionReady = true;
                 glassesConnected = true;
+                sessionReadyMs = System.currentTimeMillis();
                 setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • RADAR SESSION READY");
                 runOnUiThread(() -> connectButton.setText("REAUTHORIZE HI ROKID"));
                 worker.execute(MainActivity.this::fetchAndSendOnce);
@@ -260,6 +273,7 @@ public class MainActivity extends Activity implements LocationListener {
     private void markRadarSessionReady() {
         sessionReady = true;
         glassesConnected = true;
+        sessionReadyMs = System.currentTimeMillis();
         setStatus("HI ROKID • CONNECTED TO " + connectedDeviceName + " • RADAR SESSION READY");
         runOnUiThread(() -> connectButton.setText("REAUTHORIZE HI ROKID"));
         worker.execute(MainActivity.this::fetchAndSendOnce);
@@ -318,6 +332,37 @@ public class MainActivity extends Activity implements LocationListener {
             fetchAndSendOnce();
             try { Thread.sleep(REFRESH_MS); } catch (InterruptedException e) { return; }
         }
+    }
+
+    private void ackWatchdog() {
+        while (running) {
+            try { Thread.sleep(5000L); } catch (InterruptedException e) { return; }
+            long baseline = Math.max(lastGlassesAckMs, sessionReadyMs);
+            if (sessionReady && baseline > 0 && System.currentTimeMillis()-baseline > 45_000L) restartGlassesHud();
+        }
+    }
+
+    private synchronized void restartGlassesHud() {
+        if (restartInProgress) return;
+        restartInProgress = true;
+        sessionReadyMs = System.currentTimeMillis();
+        setStatus("GLASSES ACK STALE • RESTARTING RADAR HUD");
+        cxrLink.appStop(new IGlassAppCbk() {
+            @Override public void onInstallAppResult(boolean success) {}
+            @Override public void onUnInstallAppResult(boolean success) {}
+            @Override public void onStopAppResult(boolean success) { finishHudRestart(); }
+            @Override public void onQueryAppResult(boolean installed) {}
+            @Override public void onOpenAppResult(boolean success) {}
+            @Override public void onGlassAppResume(boolean resumed) {}
+        });
+        runOnUiThread(() -> connectButton.postDelayed(this::finishHudRestart, 2500L));
+    }
+
+    private synchronized void finishHudRestart() {
+        if (!restartInProgress) return;
+        restartInProgress = false;
+        appStartRequested = false;
+        startGlassesRadarApp();
     }
 
     private void fetchAndSendOnce() {
@@ -416,8 +461,10 @@ public class MainActivity extends Activity implements LocationListener {
             Caps args = new Caps();
             args.write(packet.toString());
             Integer result = cxrLink.sendCustomCmd(RADAR_CHANNEL, args);
-            if (result != null && result == 0)
+            if (result != null && result == 0 && System.currentTimeMillis()-lastGlassesAckMs < 45_000L)
                 setStatus("LIVE • HI ROKID → " + connectedDeviceName + " • " + rangeMiles + " MI");
+            else if (result != null && result == 0)
+                setStatus("SENDING • AWAITING " + connectedDeviceName + " ACK");
             else
                 setStatus("RADAR SEND RESULT " + String.valueOf(result) + " • " + connectedDeviceName);
         } catch (Exception e) {
@@ -430,6 +477,8 @@ public class MainActivity extends Activity implements LocationListener {
         sessionReady = false;
         appStartRequested = false;
         deliveryBurstRunning = false;
+        restartInProgress = false;
+        lastGlassesAckMs = 0L;
         try { cxrLink.disconnect(); } catch (Exception ignored) {}
     }
 

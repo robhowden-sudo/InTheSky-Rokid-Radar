@@ -29,6 +29,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends Activity implements SensorEventListener {
     private static final String RADAR_CHANNEL = "inthesky_radar_state";
@@ -100,7 +101,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                     try{
                         String json=null;
                         for(int i=0;i<args.size();i++){Caps.Value v=args.at(i);if(v!=null&&v.type()==Caps.Value.TYPE_STRING){json=v.getString();break;}}
-                        if(json!=null){cxrConnected=true;radar.applyPacket(new JSONObject(json));}
+                        if(json!=null){cxrConnected=true;radar.applyPacket(new JSONObject(json));Caps ack=new Caps();ack.write("received");cxrBridge.sendMessage("inthesky_radar_ack",ack,"ack".getBytes(StandardCharsets.UTF_8));}
                     }catch(Exception ignored){}
                 }
             });
@@ -135,9 +136,9 @@ public class MainActivity extends Activity implements SensorEventListener {
             p.setColor(Color.rgb(79,255,159));p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2f);
             dim.setColor(Color.argb(135,79,255,159));dim.setStyle(Paint.Style.STROKE);dim.setStrokeWidth(1.2f);
             bright.setColor(Color.rgb(150,255,190));bright.setStyle(Paint.Style.FILL);bright.setTextAlign(Paint.Align.CENTER);
-            fill.setColor(Color.argb(45,79,255,159));fill.setStyle(Paint.Style.FILL);
+            fill.setColor(Color.argb(16,79,255,159));fill.setStyle(Paint.Style.FILL);
             selected.setColor(Color.YELLOW);selected.setStyle(Paint.Style.STROKE);selected.setStrokeWidth(2.5f);
-            map.setColor(Color.argb(18,90,180,130));map.setStyle(Paint.Style.STROKE);map.setStrokeWidth(1f);
+            map.setColor(Color.argb(8,90,180,130));map.setStyle(Paint.Style.STROKE);map.setStrokeWidth(1f);
             post(animator);
         }
         private final Runnable animator=new Runnable(){public void run(){sweepDeg=(sweepDeg+2.2f)%360f;invalidate();if(running)postDelayed(this,33);}};
