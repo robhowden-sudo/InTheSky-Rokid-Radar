@@ -50,7 +50,9 @@ public class MainActivity extends Activity implements LocationListener {
     private static final int REQ_HI_ROKID_AUTH = 502;
     private static final long REFRESH_MS = 30_000L;
 
-    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    // One worker maintains the timed refresh loop; the second handles immediate
+    // connect/range-change refreshes instead of leaving them behind its sleep.
+    private final ExecutorService worker = Executors.newFixedThreadPool(2);
     private LocationManager locationManager;
     private Location lastLocation;
     private CXRLink cxrLink;
