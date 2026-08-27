@@ -6,6 +6,22 @@ An aircraft-detection radar for Rokid Glasses. The Android phone uses GPS and Op
 
 This is the first hardware-tested release for the Rokid Glasses and companion Android phone app.
 
+## Screenshots
+
+| Android companion | Rokid glasses radar |
+|---|---|
+| <img src="docs/screenshots/phone-app-v1.0.0.png" alt="In The Sky Rokid Radar phone app" width="320"> | <img src="docs/screenshots/rokid-glasses-radar-v1.0.0.jpg" alt="In The Sky radar running on Rokid Glasses" width="560"> |
+
+## Download the APKs
+
+1. Open the repository's **Releases** section.
+2. Select the latest release.
+3. Expand **Assets** if GitHub has collapsed the download list.
+4. Download `InTheSkyRadarPhone-v1.0.0.apk` for the Android phone.
+5. Download `InTheSkyRadarGlasses-v1.0.0.apk` for the Rokid Glasses.
+
+Direct download page: [In The Sky — Rokid Radar v1.0.0](https://github.com/robhowden-sudo/InTheSky-Rokid-Radar/releases/tag/v1.0.0)
+
 ### Highlights
 
 - Hi Rokid authorization and phone-controlled glasses launch
